@@ -3,7 +3,7 @@ use core::{cmp::max, fmt::Debug};
 use leptos::*;
 // use src_ui::*;
 
-use super::text_conversion::{text_to_imd, MDBlock};
+use super::text_conversion::{text_to_imd, MDBlock, MDBlockType};
 
 #[derive(Debug, Clone, PartialEq)]
 enum MDNodeType {
@@ -34,7 +34,7 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
 
     console_log("RELOAD");
 
-    let text = "#\n# hello\n- some point\n> this **is** cool\n> 🤡 ᾎ ᾯ y̆".to_string();
+    let text = "#\n# hello     .<!-- hi -->\n- some point\n> this **is** cool\n> 🤡 ᾎ ᾯ y̆".to_string();
     let mut blocks: Vec<Element> = Vec::new();
 
     // text intermediary between raw text and html
@@ -45,8 +45,6 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
 
     // TODO: SWAP FROM BLOCK TYPE IN CLASS TO BLOCK TYPE IN type=""
 
-    
-
     create_effect(cx, move |_| {
         console_log("setting text_imd");
         let imd = text_to_imd(&text);
@@ -55,102 +53,94 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
     });
 
     /// text_idx is so we know where to start the text parsing from (return when hit \n)
-    fn parse_md(cx: Scope, tag: &str, lvl_num: usize, text_idx: usize, text: &str) -> Vec<Element> {
-        let mut block_num = 0;
-        let mut blocks: Vec<Element> = Vec::new();
+    fn imd_to_dom(cx: Scope, imd: &Vec<MDBlock>) -> Vec<Element> {
+        // block num is so i can access `selection_start` vec from just the DOM info
+        let mut elem_num = 0;
+        let mut elem_blocks: Vec<Element> = Vec::new();
 
-        let mut char_1_back = '\n';
-        let mut idx_1_char_back: usize = 0;
-        let mut char_2_back = '\n';
-        let mut idx_2_char_back: usize = 0;
-        // let mut iter = 0..(text.len() - 1);
-        let mut iter = text.char_indices();
-        while let Some((i, char)) = iter.next()  {
-            // let char = &text[i..i+1];
-            // console_log(&format!("{char}"));
-            // console_log(&format!("{i}: {char}"));
-
-            let next_char = match iter.clone().next() {
-                Some((_, next_char)) => next_char,
-                None => continue,
-            };
-
-            console_log(&format!("prev: {char_2_back} prev: {char_1_back} now: {char} next: {next_char}"));
-
-            match char {
-                '#' => {
-                    let elem = view! {cx,
-                        <div class="h1" block=block_num>
-                        <md hidden>"# "</md>"hello"
-                        </div>
-                    };
-                    blocks.push(elem);
-                    block_num += 1;
+        for block in imd {
+            match block {
+                MDBlock::Leaf(leaf) => {
+                    match &leaf.kind {
+                        MDBlockType::H1 => {
+                            let elem = create_element("div");
+                            elem.set_attribute("type", "h1").unwrap();
+                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
+                            let content = spaces_to_nbsp(&leaf.content);
+                            let html = &format!("<md hidden>#&nbsp;</md>{}", content);
+                            elem.set_inner_html(html);
+                            elem_blocks.push(elem);
+                            elem_num += 1;
+                        },
+                        MDBlockType::Text => {
+                            let elem = create_element("div");
+                            elem.set_attribute("type", "text").unwrap();
+                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
+                            elem.set_inner_html(&spaces_to_nbsp(&leaf.content));
+                            elem_blocks.push(elem);
+                            elem_num += 1;
+                        },
+                        _ => {},
+                    }
                 },
-                '*' => {
-                    console_log("here");
-                    // ITALIC
-                    if char_1_back == ' ' && next_char != '*' {
-                        // check if it closes before a line-break, if not, ignore
-                        console_log("italic");
-
-                        // let elem = parse_md(cx, "i", line, i, text);
-                        // blocks.push(elem)
-                    // BOLD
-                    } else if char_1_back == '*' && char_2_back == ' ' {
-                        console_log("bold");
-                        let mut prev_char = ' ';
-                        let mut iter = (&text[i..]).char_indices();
-                        while let Some((j, char)) = iter.next()  {
-                            match char {
-                                '*' => {
-                                    if prev_char != ' ' {
-                                        if let Some((_, next_char)) = iter.clone().next() {
-                                            if next_char == '*' {
-                                                console_log(&text[i+1..i+j])
-                                            }
-                                        }
-                                    }
-                                },
-                                _ => {}
+                MDBlock::Branch(branch) => {
+                    match &branch.kind {
+                        MDBlockType::Quote => {
+                            let elem = create_element("div");
+                            elem.set_attribute("type", "quote").unwrap();
+                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
+                            let children = imd_to_dom(cx, &branch.children);
+                            for child in &children {
+                                elem.append_child(&child).unwrap();
                             }
-                            prev_char = char;
+                            
+                            elem_blocks.push(elem);
+                            elem_num += 1;
                         }
-                        // let elem = parse_md(cx, "b", line, i, text);
-                        // blocks.push(elem)
+                        _ => {},
                     }
                 }
-                _ => {}
             }
-            char_2_back = char_1_back;
-            char_1_back = char;
+
+            // match block {
+            //     '*' => {
+            //         console_log("here");
+            //         // ITALIC
+            //         if char_1_back == ' ' && next_char != '*' {
+            //             // check if it closes before a line-break, if not, ignore
+            //             console_log("italic");
+
+            //             // let elem = parse_md(cx, "i", line, i, text);
+            //             // blocks.push(elem)
+            //         // BOLD
+            //         } else if char_1_back == '*' && char_2_back == ' ' {
+            //             console_log("bold");
+            //             let mut prev_char = ' ';
+            //             let mut iter = (&text[i..]).char_indices();
+            //             while let Some((j, char)) = iter.next()  {
+            //                 match char {
+            //                     '*' => {
+            //                         if prev_char != ' ' {
+            //                             if let Some((_, next_char)) = iter.clone().next() {
+            //                                 if next_char == '*' {
+            //                                     console_log(&text[i+1..i+j])
+            //                                 }
+            //                             }
+            //                         }
+            //                     },
+            //                     _ => {}
+            //                 }
+            //                 prev_char = char;
+            //             }
+            //             // let elem = parse_md(cx, "b", line, i, text);
+            //             // blocks.push(elem)
+            //         }
+            //     }
+            //     _ => {}
+            // }
         }
-
-        // let parent = create_element(tag);
-        // match tag {
-        //     "div" | "h1" => parent.set_attribute("class", "block").unwrap(),
-        //     _ => {},
-        // }
-        // view! {cx,
-        //     <div class="block">
-        //         {blocks}
-        //     </div>
-        // }
-
-        blocks
+        elem_blocks
     }
-
-    // let div_e = create_element("div");
-    // div_e.set_attribute("line", "1").unwrap();
-    // div_e.set_inner_html("<b><span>**</span>xd<span>**</span></b>");
-
-    // blocks.push(div_e);
-
-    // let div_e = create_element("div");
-    // div_e.set_attribute("line", "2").unwrap();
-    // div_e.set_inner_html("<b><span>**</span>xd<span>**</span></b>");
-
-    // blocks.push(div_e);
 
     // let div_s = create_element("span");
     // div_s.set_inner_html("**");
@@ -184,20 +174,7 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
     let out = view! {cx,
         // scroll view
         <div id="md-page" contenteditable on:scroll=|_| console_log("test") on:keydown=handle_keypress>
-            {parse_md(cx, "div", 0, 0, &text)}
-            // {blocks}
-            // // <For each=lines_vec key=|e| e.num>
-            // //     {|cx: Scope, e: &GenericEventRes| {
-            // //         // view! {
-            // //         //     cx,
-            // //         //     <{move {e.elem}} />
-            // //         // }
-            // //         (e.elem)(cx)
-            // //     }}
-            // // </For>
-            // "hello"
-            // // <div html="<b>xd</b>" />.set_inner_html()
-            // {div_e}
+            {imd_to_dom(cx, &text_imd.get())}
         </div>
     };
     use crate::wasm_bindgen::closure::Closure;
@@ -322,7 +299,19 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
     out
 }
 
-
+fn spaces_to_nbsp(text: &str) -> String {
+    let mut content = String::new();
+    for char in text.chars() {
+        if char == ' ' {
+            content.push_str("&nbsp;");
+            // no need to do same for tabs bc 1) doesn't 
+            // seem like you can, and 2) tabs converted to blocks
+        } else {
+            content.push(char);
+        }
+    }
+    content
+}
 
 fn get_hideable_md_type(elem: &Element) -> HideableMDType {
     let parent_class = elem.class_list().get(0)

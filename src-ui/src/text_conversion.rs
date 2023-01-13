@@ -19,14 +19,14 @@ pub enum MDBlock {
     Branch(MDBranchBlock), // (MDBlockType, String, Vec<MDBlock>)
 }
 #[derive(Clone)]
-struct MDLeafBlock {
-    kind: MDBlockType,
-    content: String,
+pub struct MDLeafBlock {
+    pub kind: MDBlockType,
+    pub content: String,
 }
 #[derive(Clone)]
-struct MDBranchBlock {
-    kind: MDBlockType,
-    children: Vec<MDBlock>,
+pub struct MDBranchBlock {
+    pub kind: MDBlockType,
+    pub children: Vec<MDBlock>,
 }
 impl MDBlock {
     fn new_leaf(kind: MDBlockType, content: String) -> MDBlock {
@@ -54,8 +54,8 @@ impl Debug for MDBlock {
 }
 
 #[derive(Debug, Clone)]
-enum MDBlockType {
-    None, Tab, Quote, H1, H2, H3, Table, Dot, Num, Code
+pub enum MDBlockType {
+    Text, Tab, Quote, H1, H2, H3, Table, Dot, Num, Code
 }
 
 /// `pre` is the preceding text (if any) that we're using to detect 
@@ -148,7 +148,7 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
         let (txt_len, contents) = get_leaf_end_index_and_content(&text[i..]);
         // console_log(&format!("none slice: {:?}", &text[i..]));
         // console_log(&format!("h1 txt: {:?}", contents));
-        blocks.push(MDBlock::new_leaf(MDBlockType::None, contents));
+        blocks.push(MDBlock::new_leaf(MDBlockType::Text, contents));
         iter.advance_by(txt_len)
             // if at end of text, will no be able to advance by the +1, but 
             // no need to do `iter.advance_by(end_idx)` bc the 
