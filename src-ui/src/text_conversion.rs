@@ -1,4 +1,4 @@
-use core::fmt::Debug;
+use core::{fmt::Debug, mem::take};
 use leptos::*;
 // use src_ui::*;
 
@@ -21,17 +21,19 @@ pub enum MDBlock {
 #[derive(Clone)]
 pub struct MDLeafBlock {
     pub kind: MDBlockType,
-    pub content: String,
+    // originally had this as `MDText`: AH, IT SEEMS THE FIRST INSTANCE OF MDText HOOKING INTO MDBLOCK DOES NEED TO BE A VEC OF MDTEXT RATHER THAN AN MDTEXT, BC I HAVE NO WAY OF REPRESENTING WHAT THE DATA TYPE OF THE TEXT BRANCH SHOUDL BE BC ITS SURE AS SHIT NOT A BOLD OR ITALIC
+    pub text: Vec<MDText>,
 }
+
 #[derive(Clone)]
 pub struct MDBranchBlock {
     pub kind: MDBlockType,
     pub children: Vec<MDBlock>,
 }
 impl MDBlock {
-    fn new_leaf(kind: MDBlockType, content: String) -> MDBlock {
+    fn new_leaf(kind: MDBlockType, text: Vec<MDText>) -> MDBlock {
         MDBlock::Leaf(MDLeafBlock {
-            kind, content
+            kind, text
         })
     }
     fn new_branch(kind: MDBlockType, children: Vec<MDBlock>) -> MDBlock {
@@ -44,7 +46,7 @@ impl Debug for MDBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MDBlock::Leaf(leaf) => {
-                write!(f, "MDBlock::Leaf({:?}, {:?})", leaf.kind, leaf.content)
+                write!(f, "MDBlock::Leaf({:?}, {:?})", leaf.kind, leaf.text)
             },
             MDBlock::Branch(branch) => {
                 write!(f, "MDBlock::Branch({:?}, {:?})", branch.kind, branch.children)
@@ -58,14 +60,58 @@ pub enum MDBlockType {
     Text, Tab, Quote, H1, H2, H3, Table, Dot, Num, Code
 }
 
+#[derive(Clone)]
+pub enum MDText {
+    Leaf(MDLeafText), Branch(MDBranchText)
+}
+#[derive(Clone)]
+pub struct MDLeafText {
+    pub kind: MDTextType,
+    pub text: String,
+}
+#[derive(Clone)]
+pub struct MDBranchText {
+    pub kind: MDTextType,
+    pub children: Vec<MDText>,
+}
+impl MDText {
+    fn new_leaf(kind: MDTextType, text: String) -> MDText {
+        MDText::Leaf(MDLeafText {
+            kind, text
+        })
+    }
+    fn new_branch(kind: MDTextType, children: Vec<MDText>) -> MDText {
+        MDText::Branch(MDBranchText {
+            kind, children
+        })
+    }
+}
+impl Debug for MDText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MDText::Leaf(leaf) => {
+                write!(f, "MDText::Leaf({:?}, {:?})", leaf.kind, leaf.text)
+            },
+            MDText::Branch(branch) => {
+                write!(f, "MDText::Branch({:?}, {:?})", branch.kind, branch.children)
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MDTextType {
+    Raw, Bold, Italic, 
+}
+
 /// `pre` is the preceding text (if any) that we're using to detect 
 /// continuation of the block
 /// 
 /// the usize returned is the end idx so we know how many chars to skip
-pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
+pub fn text_to_imd_blocks(text: &str) -> Vec<MDBlock> {
     let mut blocks = Vec::new();
     // let mut block_start_idx = 0;
-    let block_start = true;
+    // let block_start = true;
     let mut iter = text.chars().enumerate();
     while let Some((i, char)) = iter.next() {
         console_log(&format!("CHAR: {:?}", char));
@@ -78,7 +124,8 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
                     let start_idx = i+2;
                     let (txt_len, contents
                     ) = get_leaf_end_index_and_content(&text[start_idx..]);
-                    blocks.push(MDBlock::new_leaf(MDBlockType::H1, contents));
+                    let text = text_to_imd_spans(&contents);
+                    blocks.push(MDBlock::new_leaf(MDBlockType::H1, text));
                     // + 2 bc added 2 to start index
                     iter.advance_by(txt_len + 2).unwrap();
                     continue;
@@ -90,7 +137,8 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
                     let start_idx = i+2;
                     let (txt_len, contents
                     ) = get_leaf_end_index_and_content(&text[start_idx..]);
-                    blocks.push(MDBlock::new_leaf(MDBlockType::Dot, contents));
+                    let text = text_to_imd_spans(&contents);
+                    blocks.push(MDBlock::new_leaf(MDBlockType::Dot, text));
                     // + 2 bc added 2 to start index
                     iter.advance_by(txt_len + 2).unwrap();
                     continue;
@@ -101,7 +149,7 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
                 // skip if no ' ' after
                 let next_char = iter.clone().next().unwrap().1;
                 if next_char == ' ' {
-                    // TODO: reimplement text_to_imd as A to see is better
+                    // TODO: reimplement text_to_imd as A to see if better
                     //
                     // A) pass the whole string sliced from i and let the 
                     //    recursive function detect when to end. (seems it 
@@ -118,7 +166,7 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
                     let (txt_len, contents
                     ) = get_block_end_index_and_content(&text[i+2..], "> ");
                     // recurse
-                    let sub_blocks = text_to_imd(&contents);
+                    let sub_blocks = text_to_imd_blocks(&contents);
                     blocks.push(MDBlock::new_branch(MDBlockType::Quote, sub_blocks));
                     // + 2 bc added 2 to start index
                     iter.advance_by(txt_len + 2)
@@ -132,7 +180,7 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
                 let (txt_len, contents
                 ) = get_block_end_index_and_content(&text[i+1..], "\t");
                 // recurse
-                let sub_blocks = text_to_imd(&contents);
+                let sub_blocks = text_to_imd_blocks(&contents);
                 blocks.push(MDBlock::new_branch(MDBlockType::Tab, sub_blocks));
                 // + 2 bc added 2 to start index
                 iter.advance_by(txt_len + 1)
@@ -146,9 +194,8 @@ pub fn text_to_imd(text: &str) -> Vec<MDBlock> {
         // if matches didn't work out, parse as normal leaf
 
         let (txt_len, contents) = get_leaf_end_index_and_content(&text[i..]);
-        // console_log(&format!("none slice: {:?}", &text[i..]));
-        // console_log(&format!("h1 txt: {:?}", contents));
-        blocks.push(MDBlock::new_leaf(MDBlockType::Text, contents));
+        let text = text_to_imd_spans(&contents);
+        blocks.push(MDBlock::new_leaf(MDBlockType::Text, text));
         iter.advance_by(txt_len)
             // if at end of text, will no be able to advance by the +1, but 
             // no need to do `iter.advance_by(end_idx)` bc the 
@@ -200,6 +247,93 @@ fn get_block_end_index_and_content(text: &str, pre: &str) -> (usize, String) {
             trimmed_str.push(char);
         }
     }
-    console_log(&format!("trimmed str: {:?}", trimmed_str));
+    // console_log(&format!("trimmed str: {:?}", trimmed_str));
     (end_idx, trimmed_str)
+}
+
+pub fn text_to_imd_spans(text: &str) -> Vec<MDText> {
+    // initially store as a vec, but then at the end check if vec.len() == 1 
+    // to determine which `MDText` to use
+    let mut spans: Vec<MDText> = Vec::new();
+    let mut curr_text = String::new();
+
+    let char_2_back = ' ';
+    let char_1_back = ' ';
+    let mut iter = text.chars().enumerate();
+    while let Some((i, char)) = iter.next() {
+
+        let next_char = match iter.clone().next() {
+            Some(v) => v.1,
+            // safe to skip if no next char bc there are no more spans to find
+            None => {
+                curr_text.push(char);
+                spans.push(MDText::new_leaf(MDTextType::Raw, 
+                    take(&mut curr_text)));
+                return spans;
+            },
+        }; // FIXME: this will crash if end of line
+
+        // get_span_end_index_and_content
+        match char {
+            '*' => {
+                if char_1_back == ' ' && next_char != ' ' {
+                    // BOLD
+                    if next_char == '*' {
+                        // add prev raw text string if present
+                        if !curr_text.is_empty() {
+                            spans.push(MDText::new_leaf(MDTextType::Raw, 
+                                take(&mut curr_text)));
+                        }
+                        console_log("bold");
+                        let (txt_len, text
+                        ) = get_span_end_index_and_content(
+                            &text[i+2..], "**");
+                        spans.push(MDText::new_branch(MDTextType::Bold, 
+                            text_to_imd_spans(&text)));
+                        iter.advance_by(txt_len + 3).unwrap();
+                        continue;
+                    // ITALIC
+                    } else {
+                        // add prev raw text string if present
+                        if !curr_text.is_empty() {
+                            spans.push(MDText::new_leaf(MDTextType::Raw, 
+                                take(&mut curr_text)));
+                        }
+                        console_log("italic");
+
+                        // check if it closes before a line-break, if not, ignore
+                        
+                        // let elem = parse_md(cx, "i", line, i, text);
+                        // blocks.push(elem)
+                    }
+                }
+            },
+            _ => {}
+        }
+
+        // if matches didn't work out, parse as normal text leaf
+
+        curr_text.push(char);
+    }
+    // will never reach here
+    spans
+}
+
+fn get_span_end_index_and_content(text: &str, enclosure: &str) -> (usize, String) {
+    let mut out_str = String::new();
+    let enclosure_len = enclosure.len();
+    let mut end_idx = text.len() - 1;
+    let mut prev_char = ' ';
+    let mut iter = text.chars().enumerate();
+    while let Some((i, char)) = iter.next() {
+        if let Some(slice) = text.get(i..i+enclosure_len) {
+            if enclosure == slice && prev_char != ' ' {
+                end_idx = i;
+                break;
+            }
+        }
+        out_str.push(char);
+        prev_char = char;
+    }
+    (end_idx, out_str)
 }

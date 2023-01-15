@@ -3,7 +3,7 @@ use core::{cmp::max, fmt::Debug};
 use leptos::*;
 // use src_ui::*;
 
-use super::text_conversion::{text_to_imd, MDBlock, MDBlockType};
+use super::text_conversion::{text_to_imd_blocks, MDBlock, MDBlockType, MDText, MDTextType};
 
 #[derive(Debug, Clone, PartialEq)]
 enum MDNodeType {
@@ -47,100 +47,10 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
 
     create_effect(cx, move |_| {
         console_log("setting text_imd");
-        let imd = text_to_imd(&text);
+        let imd = text_to_imd_blocks(&text);
         console_log(&format!("{:?}", imd));
         set_text_imd.update(|v| *v = imd);
     });
-
-    /// text_idx is so we know where to start the text parsing from (return when hit \n)
-    fn imd_to_dom(cx: Scope, imd: &Vec<MDBlock>) -> Vec<Element> {
-        // block num is so i can access `selection_start` vec from just the DOM info
-        let mut elem_num = 0;
-        let mut elem_blocks: Vec<Element> = Vec::new();
-
-        for block in imd {
-            match block {
-                MDBlock::Leaf(leaf) => {
-                    match &leaf.kind {
-                        MDBlockType::H1 => {
-                            let elem = create_element("div");
-                            elem.set_attribute("type", "h1").unwrap();
-                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
-                            let content = spaces_to_nbsp(&leaf.content);
-                            let html = &format!("<md hidden>#&nbsp;</md>{}", content);
-                            elem.set_inner_html(html);
-                            elem_blocks.push(elem);
-                            elem_num += 1;
-                        },
-                        MDBlockType::Text => {
-                            let elem = create_element("div");
-                            elem.set_attribute("type", "text").unwrap();
-                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
-                            elem.set_inner_html(&spaces_to_nbsp(&leaf.content));
-                            elem_blocks.push(elem);
-                            elem_num += 1;
-                        },
-                        _ => {},
-                    }
-                },
-                MDBlock::Branch(branch) => {
-                    match &branch.kind {
-                        MDBlockType::Quote => {
-                            let elem = create_element("div");
-                            elem.set_attribute("type", "quote").unwrap();
-                            elem.set_attribute("elem-num", &format!("{}", elem_num)).unwrap();
-                            let children = imd_to_dom(cx, &branch.children);
-                            for child in &children {
-                                elem.append_child(&child).unwrap();
-                            }
-                            
-                            elem_blocks.push(elem);
-                            elem_num += 1;
-                        }
-                        _ => {},
-                    }
-                }
-            }
-
-            // match block {
-            //     '*' => {
-            //         console_log("here");
-            //         // ITALIC
-            //         if char_1_back == ' ' && next_char != '*' {
-            //             // check if it closes before a line-break, if not, ignore
-            //             console_log("italic");
-
-            //             // let elem = parse_md(cx, "i", line, i, text);
-            //             // blocks.push(elem)
-            //         // BOLD
-            //         } else if char_1_back == '*' && char_2_back == ' ' {
-            //             console_log("bold");
-            //             let mut prev_char = ' ';
-            //             let mut iter = (&text[i..]).char_indices();
-            //             while let Some((j, char)) = iter.next()  {
-            //                 match char {
-            //                     '*' => {
-            //                         if prev_char != ' ' {
-            //                             if let Some((_, next_char)) = iter.clone().next() {
-            //                                 if next_char == '*' {
-            //                                     console_log(&text[i+1..i+j])
-            //                                 }
-            //                             }
-            //                         }
-            //                     },
-            //                     _ => {}
-            //                 }
-            //                 prev_char = char;
-            //             }
-            //             // let elem = parse_md(cx, "b", line, i, text);
-            //             // blocks.push(elem)
-            //         }
-            //     }
-            //     _ => {}
-            // }
-        }
-        elem_blocks
-    }
 
     // let div_s = create_element("span");
     // div_s.set_inner_html("**");
@@ -174,7 +84,7 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
     let out = view! {cx,
         // scroll view
         <div id="md-page" contenteditable on:scroll=|_| console_log("test") on:keydown=handle_keypress>
-            {imd_to_dom(cx, &text_imd.get())}
+            {imd_blocks_to_dom(&text_imd.get())}
         </div>
     };
     use crate::wasm_bindgen::closure::Closure;
@@ -209,7 +119,7 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
                 HideableMDType::None));
 
             // PARENT ELEM
-            let parent_elem = anchor.parent_element().unwrap();
+            let mut parent_elem = anchor.parent_element().unwrap();
             // get hideable md type from class (if not hideable, val is just None)
             let hideable_md_type = get_hideable_md_type(&parent_elem);
             // get node type & idx
@@ -218,9 +128,9 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
 
             // get info of all parent elems
             loop {
-                let parent_elem = parent_elem.parent_element().unwrap();
+                parent_elem = parent_elem.parent_element().unwrap();
                 // end if we reach the root node
-                if parent_elem.id() == "md-page" { break }
+                if &parent_elem.id() == "md-page" { break }
 
                 // get hideable md type from class (if not hideable, val is just None)
                 let hideable_md_type = get_hideable_md_type(&parent_elem);
@@ -241,6 +151,10 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
         let root = document().query_selector("#md-page").unwrap().unwrap();
         let mut prev_elem = root.clone();
         let mut curr_elem = root;
+
+        // FIXME: WAIT I DON'T REALLY NEED TO GO BACK ALL THE WAY BC THE ONLY 
+        // MARKDOWN THAT WILL BECOME INHIDDEN IS REALLY  IN THE TEXT/SPANS, OR 
+        // H1 HEADING
 
         for i in 0..max_len {
             // NEED TO TRACK WHEN THEY DIVERGE bc e.g. if the first elem is 
@@ -299,6 +213,122 @@ pub fn MarkdownPage(cx: Scope, name: String) -> Element {
     out
 }
 
+fn imd_blocks_to_dom(imd: &Vec<MDBlock>) -> Vec<Element> {
+    // block num is so i can access `selection_start` vec from just the DOM info
+    let mut elem_num = 0;
+    let mut elem_blocks: Vec<Element> = Vec::new();
+
+    // NOTE: THE REASON I'M USING `block` and `text` ATTRIBUTE NAMES 
+    // INSTEAD OF E.G. `elem-num` IS SO I CAN DETECT IF BLOCK OR SPAN AT 
+    // THE SAME TIME I GET IT'S NUMBER
+
+    for block in imd {
+        match block {
+            MDBlock::Leaf(leaf) => {
+                match &leaf.kind {
+                    MDBlockType::H1 => {
+                        let elem = create_element("div");
+                        elem.set_attribute("type", "h1").unwrap();
+                        elem.set_attribute("block", &format!("{}", elem_num)).unwrap();
+                        let md = create_element("md");
+                        md.set_inner_html("#&nbsp;");
+                        md.set_attribute("hidden", "").unwrap();
+                        elem.append_child(&md).unwrap();
+                        let text = imd_text_to_dom(&leaf.text);
+                        for t in text {
+                            elem.append_child(&t).unwrap();
+                        }
+                        elem_blocks.push(elem);
+                        elem_num += 1;
+                    },
+                    MDBlockType::Text => {
+                        let elem = create_element("div");
+                        elem.set_attribute("type", "text").unwrap();
+                        elem.set_attribute("block", &format!("{}", elem_num)).unwrap();
+                        let text = imd_text_to_dom(&leaf.text);
+                        for t in text {
+                            elem.append_child(&t).unwrap();
+                        }
+                        elem_blocks.push(elem);
+                        elem_num += 1;
+                    },
+                    _ => {},
+                }
+            },
+            MDBlock::Branch(branch) => {
+                match &branch.kind {
+                    MDBlockType::Quote => {
+                        let elem = create_element("div");
+                        elem.set_attribute("type", "quote").unwrap();
+                        elem.set_attribute("block", &format!("{}", elem_num)).unwrap();
+                        let children = imd_blocks_to_dom(&branch.children);
+                        for child in &children {
+                            elem.append_child(&child).unwrap();
+                        }
+                        elem_blocks.push(elem);
+                        elem_num += 1;
+                    }
+                    _ => {},
+                }
+            }
+        }
+    }
+    elem_blocks
+}
+
+fn imd_text_to_dom(imd: &Vec<MDText>) -> Vec<Element> {
+    // block num is so i can access `selection_start` vec from just the DOM info
+    let mut elem_num = 0;
+    let mut elem_spans: Vec<Element> = Vec::new();
+
+    for span in imd {
+        match span {
+            MDText::Leaf(leaf) => {
+                match &leaf.kind {
+                    MDTextType::Raw => {
+                        let elem = create_element("span");
+                        elem.set_attribute("type", "raw").unwrap();
+                        elem.set_attribute("text", &format!("{}", elem_num)).unwrap();
+                        elem.set_inner_html(&spaces_to_nbsp(&leaf.text));
+                        elem_spans.push(elem);
+                        elem_num += 1;
+                    },
+                    _ => {},
+                }
+            },
+            MDText::Branch(branch) => {
+                match &branch.kind {
+                    MDTextType::Bold => {
+                        let elem = create_element("span");
+                        elem.set_attribute("type", "b").unwrap();
+                        elem.set_attribute("text", &format!("{}", elem_num)).unwrap();
+                        let md = create_element("md");
+                        md.set_inner_html("**");
+                        md.set_attribute("hidden", "").unwrap();
+                        elem.append_child(&md).unwrap();
+                        let children = imd_text_to_dom(&branch.children);
+                        for child in &children {
+                            elem.append_child(&child).unwrap();
+                        }
+                        let md = create_element("md");
+                        md.set_inner_html("**");
+                        md.set_attribute("hidden", "").unwrap();
+                        elem.append_child(&md).unwrap();
+                        elem_spans.push(elem);
+                        elem_num += 1;
+                    }
+                    MDTextType::Italic => {
+
+                    },
+                    _ => {},
+                }
+            }
+        }
+    }
+    elem_spans
+}
+
+
 fn spaces_to_nbsp(text: &str) -> String {
     let mut content = String::new();
     for char in text.chars() {
@@ -314,23 +344,28 @@ fn spaces_to_nbsp(text: &str) -> String {
 }
 
 fn get_hideable_md_type(elem: &Element) -> HideableMDType {
-    let parent_class = elem.class_list().get(0)
+    let kind = elem.get_attribute("type")
         .unwrap_or("".to_string());
-    match parent_class.as_str() {
+    match kind.as_str() {
         "h1" => HideableMDType::H1,
+        "b" => HideableMDType::Bold,
         _ => HideableMDType::None,
     }
 }
 fn get_span_or_block_info(elem: &Element) -> (MDNodeType, usize) {
-    console_log(&format!("{:?}", elem.tag_name()));
     // get node type
     if let Some(block_num) = elem.get_attribute("block") {
         (MDNodeType::Block, block_num.parse().unwrap())
     } else {
-        let span_num = elem.get_attribute("span").unwrap();
+        let span_num = elem.get_attribute("text").unwrap();
         (MDNodeType::Span, span_num.parse().unwrap())
     }
 }
+
+// TODO: run a test on array re-rendering by rendering elems of an array, 
+// change an attrbiute of an elem in console, then trigger removal of a single 
+// element to see if attribute of other elem is removed, or just that remove 
+// value gets removed in the re-render
 
 fn hide_md(node_info: &MDNodeInfo, elem: &Element) {
     // FIXME: just realized if the structure of the file changes, 
@@ -338,6 +373,12 @@ fn hide_md(node_info: &MDNodeInfo, elem: &Element) {
     match node_info.2 {
         HideableMDType::H1 => {
             let hidden_md = elem.first_element_child().unwrap();
+            hidden_md.set_attribute("hidden", "").unwrap();
+        },
+        HideableMDType::Bold => {
+            let hidden_md = elem.first_element_child().unwrap();
+            hidden_md.set_attribute("hidden", "").unwrap();
+            let hidden_md = elem.last_element_child().unwrap();
             hidden_md.set_attribute("hidden", "").unwrap();
         },
         _ => {},
@@ -349,9 +390,17 @@ fn unhide_md(node_info: &MDNodeInfo, elem: &Element) {
             let hidden_md = elem.first_element_child().unwrap();
             hidden_md.remove_attribute("hidden").unwrap();
         },
+        HideableMDType::Bold => {
+            let hidden_md = elem.first_element_child().unwrap();
+            hidden_md.remove_attribute("hidden").unwrap();
+            let hidden_md = elem.last_element_child().unwrap();
+            hidden_md.remove_attribute("hidden").unwrap();
+        },
         _ => {},
     }
 }
+
+// this is some *very* cool /text/
 
 // #[component]
 // pub fn H1(cx: Scope, contents: String) -> Element {

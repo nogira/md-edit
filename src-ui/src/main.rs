@@ -14,8 +14,8 @@ pub fn main() {
     console_error_panic_hook::set_once();
     mount_to_body(|cx| view! { cx, 
         <div>
-            // <MarkdownPage name="Michal".to_string() />
-            <PageBlock text="weeeeee".to_string() idx=0 />
+            <MarkdownPage name="Michal".to_string() />
+            // <PageBlock text="weeeeee".to_string() idx=0 />
             // <li>"hi"</li>
             // <li>"hi"<ul><li>"hi"</li></ul></li>
             // <SimpleCounter name="Michal".to_string() />
@@ -39,6 +39,8 @@ struct SubBlock {
 // enum PageNodeType {
 //     Quote, H1, H2, H3
 // }
+
+// TODO: change PageBlock to EditablePage prototype
 
 #[component]
 pub fn PageBlock(cx: Scope, text: String, idx: usize) -> Element {
@@ -69,6 +71,5 @@ pub fn PageBlock(cx: Scope, text: String, idx: usize) -> Element {
                 }}
             </For>
         </div>
-        
     }
 }

@@ -3,3 +3,21 @@
     color: blueviolet;
     font-size: 250%;
 }
+
+[type=b] { 
+    font-weight: bold;
+}
+
+[type=i] { 
+    font-style: italic;
+}
+
+[type=sup] { 
+    vertical-align: super;
+    font-size: smaller;
+}
+
+[type=sub] { 
+    vertical-align: sub;
+    font-size: smaller;
+}
