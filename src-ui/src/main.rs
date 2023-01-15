@@ -68,13 +68,13 @@ pub fn EditablePage(cx: Scope) -> Element {
 
     view! {cx,
         <div contenteditable>
-            <PageBlocks nodes />
+            <PageNodes nodes />
         </div>
     }
 }
 
 #[component]
-pub fn PageBlocks(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Memo<Vec<Element>> {
+pub fn PageNodes(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Memo<Vec<Element>> {
 
     view! {cx,
         <For each=nodes key=|e| e.id>
@@ -118,7 +118,7 @@ pub fn PageBlocks(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Memo<Vec<Element
 pub fn H1(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
     view! {cx,
         <div type="h1">
-            <PageBlocks nodes />
+            <PageNodes nodes />
         </div>
     }
 }
