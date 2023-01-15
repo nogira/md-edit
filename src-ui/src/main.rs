@@ -13,63 +13,121 @@ pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
     console_error_panic_hook::set_once();
     mount_to_body(|cx| view! { cx, 
-        <div>
-            <MarkdownPage name="Michal".to_string() />
-            // <PageBlock text="weeeeee".to_string() idx=0 />
-            // <li>"hi"</li>
-            // <li>"hi"<ul><li>"hi"</li></ul></li>
-            // <SimpleCounter name="Michal".to_string() />
-        </div>
+        <>
+            <EditablePage />
+        </>
     })
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SubBlock {
-    id: usize,
-    text: String,
+pub struct PageNode {
+    pub id: usize,
+    pub kind: PageNodeType,
+    pub contents: PageNodeContents,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageNodeContents {
+    Children(RwSignal<Vec<PageNode>>), Content(RwSignal<HashMap<String, String>>)
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageNodeType {
+    // block-branch
+    Quote,
+    // block-leaf
+    H1, H2, H3,
+    // text-branch
+    Bold, Italic,
+    // text-leaf
+    Text,
 }
 
-// struct PageNode {
-//     kind: PageNodeType,
-//     contents: PageNodeContents
-// }
-// enum PageNodeContents {
-//     Children(Vec<PageNode>), Content(HashMap<String, String>)
-// }
-// enum PageNodeType {
-//     Quote, H1, H2, H3
-// }
-
-// TODO: change PageBlock to EditablePage prototype
-
 #[component]
-pub fn PageBlock(cx: Scope, text: String, idx: usize) -> Element {
+pub fn EditablePage(cx: Scope) -> Element {
 
-    let (
-        top_line_num,
-        set_top_line_num
-    ) = create_signal::<u32>(cx, 0);
+    // TODO: * load in a Vec<PageNode> from file (same structure but w/o the RwSignal) *
 
-    // parse block_text to block
-    let mut sub_blocks: Vec<SubBlock> = Vec::new();
-    if idx == 0 {
-        sub_blocks.push(SubBlock { id: 1, text: "one".to_string() });
-        sub_blocks.push(SubBlock { id: 2, text: "two".to_string() });
-        sub_blocks.push(SubBlock { id: 3, text: "thr".to_string() });
-    }
+    let nodes: RwSignal<Vec<PageNode>> = create_rw_signal(cx, vec![
+        PageNode {
+            id: 0, kind: PageNodeType::H1, contents: PageNodeContents::Children(
+                create_rw_signal(cx, vec![
+                    PageNode {
+                        id: 0, kind: PageNodeType::Text, contents: PageNodeContents::Content(
+                            create_rw_signal(cx, HashMap::from([("text".to_string(), "some text".to_string())]))
+                        )
+                    }
+                ])
+            )
+        }
+    ]);
 
-    console_log(&format!("{:?}", cx.all_resources()));
+    // TODO: ideally these should be loaded in from the file
+    let top_line_num: RwSignal<u32> = create_rw_signal(cx, 0);
+    // this might not be needed bc can prob calc from top_line_num ??
+    // let scroll_position: RwSignal<u32> = create_rw_signal(cx, 0);
 
     view! {cx,
-        <div block=0 on:click=|_| console_log("click")>
-            {text}
-            <For each=move || {sub_blocks.clone()} key=|e| e.id>
-                {|cx: Scope, e: &SubBlock| {
-                    view! {cx,
-                        <PageBlock text=e.text.clone() idx=e.id />
-                    }
-                }}
-            </For>
+        <div contenteditable>
+            <PageBlocks nodes />
         </div>
+    }
+}
+
+#[component]
+pub fn PageBlocks(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Memo<Vec<Element>> {
+
+    view! {cx,
+        <For each=nodes key=|e| e.id>
+            {|cx: Scope, e: &PageNode| {
+                match e.contents {
+                    PageNodeContents::Children(nodes) => {
+                        match e.kind {
+                            PageNodeType::H1 => {
+                                view! {cx,
+                                    <H1 nodes />
+                                }
+                            }
+                            _ => {
+                                view! {cx,
+                                    <div>"fail!!!"</div>
+                                }
+                            }
+                        }
+                    }
+                    PageNodeContents::Content(content) => {
+                        match e.kind {
+                            PageNodeType::Text => {
+                                view! {cx,
+                                    <Text content />
+                                }
+                            }
+                            _ => {
+                                view! {cx,
+                                    <div>"fail!!!"</div>
+                                }
+                            }
+                        }
+                    }
+                }
+            }}
+        </For>
+    }
+}
+
+#[component]
+pub fn H1(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+    view! {cx,
+        <div type="h1">
+            <PageBlocks nodes />
+        </div>
+    }
+}
+
+#[component]
+pub fn Text(cx: Scope, content: RwSignal<HashMap<String, String>>) -> Element {
+    view! {cx,
+        <span type="text">
+            {content.get().get("text").unwrap()}
+        </span>
     }
 }

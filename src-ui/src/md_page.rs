@@ -362,11 +362,6 @@ fn get_span_or_block_info(elem: &Element) -> (MDNodeType, usize) {
     }
 }
 
-// TODO: run a test on array re-rendering by rendering elems of an array, 
-// change an attrbiute of an elem in console, then trigger removal of a single 
-// element to see if attribute of other elem is removed, or just that remove 
-// value gets removed in the re-render
-
 fn hide_md(node_info: &MDNodeInfo, elem: &Element) {
     // FIXME: just realized if the structure of the file changes, 
     // these unwraps could fail
