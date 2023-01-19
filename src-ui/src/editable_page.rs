@@ -1,10 +1,13 @@
 use std::{collections::{HashMap, hash_map::DefaultHasher}, hash::{Hash, Hasher, self}};
 use core::{cmp::max, fmt::Debug};
-use leptos::{*, js_sys::Math, web_sys::Element};
+use leptos::{*, js_sys::Math};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
 // use web_sys::Element;
 // use src_ui::*;
+
+// FIXME: CURRENTLY BOTTLENECKED BY NOT BEING ABLE TO GET THE SIZE OF AN 
+// ELEMENT ==AFTER== IT HAS BEEN RENDERED TO THE DOM
 
 /// pass in the element that has been updated, and update all elements IN_VIEW 
 /// below. we don't need to update ones out of view bc they will update when 
@@ -251,11 +254,15 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // console_log(&format!("HIEGHT: {:?}", page.get_box_quads()));
 
+    // on_mounted
+
     // create_effect(cx, move |_| {
     //     console_log("hello");
-    //     let elem = document().query_selector("[type=\"page\"]").unwrap().unwrap();
-    //     console_log(&format!("{:?}", elem.get_box_quads()));
+    //     if let Some(elem) = document().query_selector("[type=page]").unwrap() {
+    //         console_log(&format!("{:?}", elem.get_box_quads()));
+    //     };
     // });
+    // create_effect
 
     view! {cx,
         <div contenteditable
@@ -263,7 +270,10 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         on:scroll=|_| console_log("scroll")
         // on:keydown=handle_keypress
         >
-            {page_nodes(page_data.get().nodes, Vec::new(), page_data.get().locations)}
+            <PageNodes
+            nodes=page_data.get().nodes
+            location=Vec::new()
+            hashes=page_data.get().locations />
         </div>
     }
 }
@@ -336,63 +346,52 @@ fn rand_alphanumerecimal_hash() -> String {
 // digestMessage(text)
 //   .then((digestHex) => console.log(digestHex));
 
-pub fn page_nodes(
+#[component]
+pub fn PageNodes(cx: Scope,
     nodes: RwSignal<Vec<PageNode>>,
     location: Vec<usize>,
     hashes: RwSignal<HashMap<String, Vec<usize>>>
-) -> Vec<Element> {
-
-    let mut elems = Vec::new();
+) -> impl IntoView {
+    let mut elems: Vec<HtmlElement<AnyElement>> = Vec::new();
 
     for (i, node) in nodes.get().iter().enumerate() {
         let mut location = location.clone();
-        match node.contents {
+        location.push(i);
+        let elem = match node.contents {
             PageNodeContents::Children(nodes) => {
                 match node.kind {
-                    PageNodeType::H1 => {
-                        
-                        let elem = document().create_element("div").unwrap();
-                        elem.set_attribute("contenteditable", "").unwrap();
-                        elem.set_attribute("type", PageNodeType::H1.value()).unwrap();
-                        location.push(i);
-                        for child in page_nodes(nodes, location, hashes) {
-                            elem.append_child(&child).unwrap();
-                        }
-                        elems.push(elem);
+                    PageNodeType::H1 => view! {cx,
+                        <div contenteditable
+                        type=PageNodeType::H1.value()>
+                            <PageNodes nodes location hashes />
+                        </div>
                     },
-                    PageNodeType::TextBlock => {
-                        let elem = document().create_element("div").unwrap();
-                        // elem.set_attribute("contenteditable", "");
-                        elem.set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
-                        location.push(i);
-                        for child in page_nodes(nodes, location, hashes) {
-                            elem.append_child(&child).unwrap();
-                        }
-                        elems.push(elem);
+                    PageNodeType::TextBlock => view! {cx,
+                        <div type=PageNodeType::TextBlock.value()>
+                            <PageNodes nodes location hashes />
+                        </div>
                     },
-                    _ => {
-                        let elem = document().create_element("div").unwrap();
-                        elem.set_inner_html("‼️ block missing");
-                        elems.push(elem);
+                    _ => view! {cx,
+                        <div>"‼️ block missing"</div>
                     },
-                }
+                }.into_any()
             }
             PageNodeContents::Content(content) => {
                 match node.kind {
-                    PageNodeType::RawText => {
-                        let elem = document().create_element("span").unwrap();
-                        elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
-                        elem.set_inner_html(content.get().get("text").unwrap());
-                        elems.push(elem);
+                    PageNodeType::RawText => view! {cx,
+                        <span type=PageNodeType::RawText.value()>
+                            {content.get().get("text").unwrap()}
+                        </span>
                     },
-                    _ => {
-                        let elem = document().create_element("div").unwrap();
-                        elem.set_inner_html("‼️ only raw text allowed");
-                        elems.push(elem);
+                    _ => view! {cx,
+                        <span type=PageNodeType::RawText.value()>
+                            "‼️ only raw text allowed"
+                        </span>
                     },
-                }
+                }.into_any()
             }
-        }
+        };
+        elems.push(elem);
     }
     elems
 }
