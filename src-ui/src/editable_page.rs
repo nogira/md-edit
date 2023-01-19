@@ -1,8 +1,9 @@
-use std::{collections::{HashMap, hash_map::DefaultHasher}, hash::{Hash, Hasher}};
+use std::{collections::{HashMap, hash_map::DefaultHasher}, hash::{Hash, Hasher, self}};
 use core::{cmp::max, fmt::Debug};
-use leptos::{*, js_sys::Math};
+use leptos::{*, js_sys::Math, web_sys::Element};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
+// use web_sys::Element;
 // use src_ui::*;
 
 /// pass in the element that has been updated, and update all elements IN_VIEW 
@@ -12,14 +13,41 @@ fn update_dims(start_elem: Vec<usize>) {
 
 }
 
+// seems EXTREMELY complex/janky to get the top/bottom/height of each element 
+// bc it must be rendered to the DOM to have those attributes, and there is no 
+// easy way to trigger a callback as soon as the element loads
+
+// way to avoid this is prob to simply keep track of the height of the top 
+// elem, as knowing the metrics of the other elems is pretty irrelevent
+// 
+// when top elem moves out of view, add top="x" attribute to elem below, then 
+// disappear the out-of-view elem. in addition, it seems like this would be 
+// much harder w/ nested elems bc you would have to add top="x" to all of them, 
+// and seems v complex to add and remove children while scrolling up/down
+// SOLUTION: ONLY DO IN-VIEW RENDERING FOR THE BASE ELEMENTS, NOT THE CHILDREN.
+// this is quite feasible bc long blocks are not extremely common
+//
+// actually on second thought it might not be that hard to update them. once 
+// you have to top child all you need to do is go though the `location` list 
+// to change all the `top` attrs
+// 
+// SOMETHING ELSE IS I PREF WANT
+
 // ok so i need to store the hash + path of all elements. this is to enable 
 // both selections, edits, and in-view rendering/rerendering
 
-pub struct Page
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub nodes: RwSignal<Vec<PageNode>>,
+    /// (hash, location, top)
+    /// also use this to calculate scroll position
+    pub top_elem: RwSignal<(String, Vec<usize>, usize)>,
+    pub locations: RwSignal<HashMap<String, Vec<usize>>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageNode {
-    pub id: usize,
+    pub hash: String,
     pub kind: PageNodeType,
     pub contents: PageNodeContents,
     // /// the y-axis top of the element in pixels
@@ -31,25 +59,11 @@ pub struct PageNode {
 pub enum PageNodeContents {
     Children(RwSignal<Vec<PageNode>>), Content(RwSignal<HashMap<String, String>>)
 }
-impl PageNode {
-    fn unwrap_children(self) -> RwSignal<Vec<PageNode>> {
-        match self.contents {
-            PageNodeContents::Children(children) => children,
-            PageNodeContents::Content(_) => panic!(""),
-        }
-    }
-    fn unwrap_content(self) -> RwSignal<HashMap<String, String>> {
-        match self.contents {
-            PageNodeContents::Children(_) => panic!(""),
-            PageNodeContents::Content(content) => content,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageNodeType {
     // root
-    Page, // using Page as root so able to attach a method to index node (as 
+    // Page, // using Page as root so able to attach a method to index node (as 
           // otherwise you would have to first index the root RwSignal<Vec<PageNode>> 
           // before runniing PageNode index method)
     // block-branch
@@ -64,7 +78,6 @@ pub enum PageNodeType {
 impl PageNodeType {
     fn value(&self) -> &str {
         match *self {
-            PageNodeType::Page => "p",
             PageNodeType::Quote => "q",
             PageNodeType::TextBlock => "tb",
             PageNodeType::H1 => "h1",
@@ -82,67 +95,61 @@ impl PageNodeType {
     }
 }
 
-#[derive(Serialize)]
-struct RetreiveFileCmdArgs {
-    hash: String,
-}
-async fn retrieve_file(hash: String) -> String {
-    tauri::invoke("retrieve_file", &RetreiveFileCmdArgs { hash })
-        .await
-        .unwrap()
-}
+// #[derive(Serialize)]
+// struct RetreiveFileCmdArgs {
+//     hash: String,
+// }
+// async fn retrieve_file(hash: String) -> String {
+//     tauri::invoke("retrieve_file", &RetreiveFileCmdArgs { hash })
+//         .await
+//         .unwrap()
+// }
 
-pub enum Key {
-    Return, Delete, ForwardSlash
-}
-impl Key {
-    fn key_code(&self) -> u32 {
-        match self {
-            Key::Return => 13,
-            Key::Delete => 8,
-            Key::ForwardSlash => 191,
-        }
-    }
-}
+// pub enum Key {
+//     Return, Delete, ForwardSlash
+// }
+// impl Key {
+//     fn key_code(&self) -> u32 {
+//         match self {
+//             Key::Return => 13,
+//             Key::Delete => 8,
+//             Key::ForwardSlash => 191,
+//         }
+//     }
+// }
 
 #[component]
-pub fn EditablePage(cx: Scope) -> Element {
+pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // TODO: * load in a Vec<PageNode> from file (same structure but w/o the RwSignal) *
 
-    let nodes: RwSignal<PageNode> = create_rw_signal(cx,
-        PageNode { id: 0, kind: PageNodeType::Page, contents: PageNodeContents::Children(
-            create_rw_signal(cx, vec![
-                PageNode {
-                    id: 0, kind: PageNodeType::H1, contents: PageNodeContents::Children(
-                        create_rw_signal(cx, vec![
-                            PageNode {
-                                id: 0, kind: PageNodeType::RawText, contents: PageNodeContents::Content(
-                                    create_rw_signal(cx, HashMap::from([("text".to_string(), "some text".to_string())]))
-                                )
-                            }
-                        ])
-                    )
-                },
-                PageNode {
-                    id: 1, kind: PageNodeType::TextBlock, contents: PageNodeContents::Children(
-                        create_rw_signal(cx, vec![
-                            PageNode {
-                                id: 0, kind: PageNodeType::RawText, contents: PageNodeContents::Content(
-                                    create_rw_signal(cx, HashMap::from([("text".to_string(), "some text".to_string())]))
-                                )
-                            }
-                        ])
-                    )
-                }
-            ])
-        )}
+    let page_data: RwSignal<Page> = create_rw_signal(cx,
+        Page { nodes: create_rw_signal(cx, vec![
+            PageNode {
+                hash: "".into(), kind: PageNodeType::H1, contents: PageNodeContents::Children(
+                    create_rw_signal(cx,vec![
+                        PageNode {
+                            hash: "".into(), kind: PageNodeType::RawText, contents: PageNodeContents::Content(
+                                create_rw_signal(cx,HashMap::from([("text".to_string(), "some text".to_string())]))
+                            )
+                        }
+                    ])
+                )
+            },
+            PageNode {
+                hash: "".into(), kind: PageNodeType::TextBlock, contents: PageNodeContents::Children(
+                    create_rw_signal(cx,vec![
+                        PageNode {
+                            hash: "".into(), kind: PageNodeType::RawText, contents: PageNodeContents::Content(
+                                create_rw_signal(cx,HashMap::from([("text".to_string(), "some text".to_string())]))
+                            )
+                        }
+                    ])
+                )
+            }
+        ]), top_elem: create_rw_signal(cx, ("".into(), Vec::new(), 0))
+        , locations: create_rw_signal(cx, HashMap::new())}
     );
-
-    // TODO: ideally these should be loaded in from the file
-    let top_line_num: RwSignal<u32> = create_rw_signal(cx, 0);
-    // this might not be needed bc can prob calc from top_line_num ??
-    // let scroll_position: RwSignal<u32> = create_rw_signal(cx, 0);
 
     // ok so lets start by doing rendering conditional upon being within view, 
     // then appending hash to hashset if item is rendered
@@ -151,109 +158,114 @@ pub fn EditablePage(cx: Scope) -> Element {
     // if i'm able to attach a message event to each node, i could send a 
     // message by posting to the element looked up by hash (i.e. querySelector())
 
-    let handle_keypress = move |event: web_sys::KeyboardEvent| {
+    // let handle_keypress = move |event: web_sys::KeyboardEvent| {
 
-        // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
-        // EVERYTHING ELSE IS ALREADY FINE
+    //     // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
+    //     // EVERYTHING ELSE IS ALREADY FINE
 
-        // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
+    //     // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
 
-        let selection = document().get_selection().unwrap().unwrap();
-        let key_code = event.key_code();
-        console_log(&format!("KEY: {:?}", key_code));
-        // first check selection type bc if no selection, and not a special 
-        // char, we don't need to do anything. if there is a selection though 
-        // be need to handle the deletion
-        let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
+    //     let selection = document().get_selection().unwrap().unwrap();
+    //     let key_code = event.key_code();
+    //     console_log(&format!("KEY: {:?}", key_code));
+    //     // first check selection type bc if no selection, and not a special 
+    //     // char, we don't need to do anything. if there is a selection though 
+    //     // be need to handle the deletion
+    //     let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
 
-        let keys = [
-            Key::Return.key_code(),
-            Key::Delete.key_code(),
-            Key::ForwardSlash.key_code(),
-        ];
-        if &sel_type == "Range" || keys.contains(&key_code) {
-            let nodes = nodes.get();
+    //     let keys = [
+    //         Key::Return.key_code(),
+    //         Key::Delete.key_code(),
+    //         Key::ForwardSlash.key_code(),
+    //     ];
+    //     if &sel_type == "Range" || keys.contains(&key_code) {
+    //         let nodes = page_data.get();
 
-            // FIXME: shit maybe i need hashing after-all w/ the hashes also 
-            // stored in a signal along with their paths. looks like it will 
-            // be very expensive to find the position of each child w/o it (if even possible)
-            let start_node = selection.anchor_node().unwrap();
-            let start_offset = selection.anchor_offset();
+    //         // FIXME: shit maybe i need hashing after-all w/ the hashes also 
+    //         // stored in a signal along with their paths. looks like it will 
+    //         // be very expensive to find the position of each child w/o it (if even possible)
+    //         let start_node = selection.anchor_node().unwrap();
+    //         let start_offset = selection.anchor_offset();
 
-            if &sel_type == "Range" {
+    //         if &sel_type == "Range" {
 
-            } else {
+    //         } else {
 
-            }
+    //         }
 
 
 
-            // RETURN key pressed
-            if event.key_code() == 13 {
-                event.prevent_default();
-                let parent = selection.anchor_node().unwrap().parent_element().unwrap();
-                console_log(&format!("...: {:?}", parent));
-                // console_log(&format!("{:?}", selection.anchor_node().unwrap().parent_element().unwrap().get_attribute("block").unwrap()));
+    //         // RETURN key pressed
+    //         if event.key_code() == 13 {
+    //             event.prevent_default();
+    //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
+    //             console_log(&format!("...: {:?}", parent));
+    //             // console_log(&format!("{:?}", selection.anchor_node().unwrap().parent_element().unwrap().get_attribute("block").unwrap()));
 
-            // DELETE key pressed
-            } else if event.key_code() == 8 {
-                // FIXME: only need to prevent default if the delete if the first 
-                // char in a block
-                event.prevent_default();
+    //         // DELETE key pressed
+    //         } else if event.key_code() == 8 {
+    //             // FIXME: only need to prevent default if the delete if the first 
+    //             // char in a block
+    //             event.prevent_default();
 
-                // TODO: i wonder if its better to immediately find the offset in 
-                // string, and current node, then edit the data for re-render 
-                // rather than any parsing of the DOM itself
+    //             // TODO: i wonder if its better to immediately find the offset in 
+    //             // string, and current node, then edit the data for re-render 
+    //             // rather than any parsing of the DOM itself
 
-                // can't store location of each node in the element itself bc e.g. 
-                // when a node is removed you would have to update all elements in 
-                // the vec with their new indexes which defeats the purpose of 
-                // reactivity
+    //             // can't store location of each node in the element itself bc e.g. 
+    //             // when a node is removed you would have to update all elements in 
+    //             // the vec with their new indexes which defeats the purpose of 
+    //             // reactivity
 
-                let selection = document().get_selection().unwrap().unwrap();
-                let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
+    //             let selection = document().get_selection().unwrap().unwrap();
+    //             let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
                 
-                // let node locatio
+    //             // let node locatio
 
-                let offset = selection.anchor_offset();
-                let selected = selection.anchor_node().unwrap();
-                let len = selected.to_string().length();
-                console_log(&format!("SEL TYPE: {:?}", len));
-                let parent = selection.anchor_node().unwrap().parent_element().unwrap();
-                let kind = parent.get_attribute("node").unwrap();
-                console_log(&format!("TYPE: {:?}", kind));
-                // step 1, check if block or span, bc need to get to parent block
-                // if selection is at start of block, 
-                match kind.as_str() {
-                    // span
-                    "span" => {},
-                    // block
-                    _ => {},
-                }
-                // if parent.tag_name() == "MD" {
-                //     let md_elem = parent.parent_element().unwrap();
-                // }
-                // let full_page = 
-                console_log(&format!("KEY: {:?}", event.key_code()));
-            }
-        }
-    };
+    //             let offset = selection.anchor_offset();
+    //             let selected = selection.anchor_node().unwrap();
+    //             let len = selected.to_string().length();
+    //             console_log(&format!("SEL TYPE: {:?}", len));
+    //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
+    //             let kind = parent.get_attribute("node").unwrap();
+    //             console_log(&format!("TYPE: {:?}", kind));
+    //             // step 1, check if block or span, bc need to get to parent block
+    //             // if selection is at start of block, 
+    //             match kind.as_str() {
+    //                 // span
+    //                 "span" => {},
+    //                 // block
+    //                 _ => {},
+    //             }
+    //             // if parent.tag_name() == "MD" {
+    //             //     let md_elem = parent.parent_element().unwrap();
+    //             // }
+    //             // let full_page = 
+    //             console_log(&format!("KEY: {:?}", event.key_code()));
+    //         }
+    //     }
+    // };
 
     rand_alphanumerecimal_hash();
     // console_log(rand_alphanumerecimal_hash().as_str());
 
-    let page = view! {cx,
+    // console_log(&format!("HIEGHT: {:?}", page.get_box_quads()));
+
+    // create_effect(cx, move |_| {
+    //     console_log("hello");
+    //     let elem = document().query_selector("[type=\"page\"]").unwrap().unwrap();
+    //     console_log(&format!("{:?}", elem.get_box_quads()));
+    // });
+
+    view! {cx,
         <div contenteditable
-        type=PageNodeType::Page.value()
+        type="page"
         on:scroll=|_| console_log("scroll")
-        on:keydown=handle_keypress
+        // on:keydown=handle_keypress
         >
-            <PageNodes nodes=nodes.get().unwrap_children() />
+            {page_nodes(page_data.get().nodes, Vec::new(), page_data.get().locations)}
         </div>
-    };
-    console_log(&format!("HIEGHT: {:?}", page.get_box_quads()));
-    
-    page
+    }
 }
 
 // TODO: if compare doesn't work to find the number of the child, use the hash after-all, purely for unique child-nodes. ohhhh wait this wouldn't work bc i'm not rendering all the nodes to the page. MAYBE BETTER TO JUST SAY FUCK REACTVITY AND RE-RENDER ALL VISIBLE (AT LEAST ALL THAT NEED TO UPDATE INDEXES) WHEN UPDATE OCCURS
@@ -324,62 +336,65 @@ fn rand_alphanumerecimal_hash() -> String {
 // digestMessage(text)
 //   .then((digestHex) => console.log(digestHex));
 
-#[component]
-pub fn PageNodes(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Memo<Vec<Element>> {
+pub fn page_nodes(
+    nodes: RwSignal<Vec<PageNode>>,
+    location: Vec<usize>,
+    hashes: RwSignal<HashMap<String, Vec<usize>>>
+) -> Vec<Element> {
 
-    view! {cx,
-        <For each=nodes key=|e| e.id.to_string()>
-            {|cx: Scope, e: &PageNode| {
-                match e.contents {
-                    PageNodeContents::Children(nodes) => {
-                        match e.kind {
-                            PageNodeType::H1 => view! {cx,
-                                <H1 nodes />
-                            },
-                            PageNodeType::TextBlock => view! {cx,
-                                <TextBlock nodes />
-                            },
-                            _ => view! {cx,
-                                <div>"‼️ block missing"</div>
-                            },
+    let mut elems = Vec::new();
+
+    for (i, node) in nodes.get().iter().enumerate() {
+        let mut location = location.clone();
+        match node.contents {
+            PageNodeContents::Children(nodes) => {
+                match node.kind {
+                    PageNodeType::H1 => {
+                        
+                        let elem = document().create_element("div").unwrap();
+                        elem.set_attribute("contenteditable", "").unwrap();
+                        elem.set_attribute("type", PageNodeType::H1.value()).unwrap();
+                        location.push(i);
+                        for child in page_nodes(nodes, location, hashes) {
+                            elem.append_child(&child).unwrap();
                         }
-                    }
-                    PageNodeContents::Content(content) => {
-                        match e.kind {
-                            PageNodeType::RawText => view! {cx,
-                                <Text content />
-                            },
-                            _ => view! {cx,
-                                <div>"‼️ only raw text allowed"</div>
-                            },
+                        elems.push(elem);
+                    },
+                    PageNodeType::TextBlock => {
+                        let elem = document().create_element("div").unwrap();
+                        // elem.set_attribute("contenteditable", "");
+                        elem.set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
+                        location.push(i);
+                        for child in page_nodes(nodes, location, hashes) {
+                            elem.append_child(&child).unwrap();
                         }
-                    }
+                        elems.push(elem);
+                    },
+                    _ => {
+                        let elem = document().create_element("div").unwrap();
+                        elem.set_inner_html("‼️ block missing");
+                        elems.push(elem);
+                    },
                 }
-            }}
-        </For>
+            }
+            PageNodeContents::Content(content) => {
+                match node.kind {
+                    PageNodeType::RawText => {
+                        let elem = document().create_element("span").unwrap();
+                        elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
+                        elem.set_inner_html(content.get().get("text").unwrap());
+                        elems.push(elem);
+                    },
+                    _ => {
+                        let elem = document().create_element("div").unwrap();
+                        elem.set_inner_html("‼️ only raw text allowed");
+                        elems.push(elem);
+                    },
+                }
+            }
+        }
     }
-}
-
-#[component]
-pub fn H1(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <div contenteditable
-        type=PageNodeType::H1.value()>
-            <PageNodes nodes />
-        </div>
-    }
-}
-
-
-
-#[component]
-pub fn TextBlock(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <div contenteditable
-        type=PageNodeType::TextBlock.value()>
-            <PageNodes nodes />
-        </div>
-    }
+    elems
 }
 
 // #[component]
@@ -394,65 +409,55 @@ pub fn TextBlock(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
 
 // not sure these need to be specialized. do above instead??
 
-#[component]
-pub fn UrlLink(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::UrlLink.value()>
-            <PageNodes nodes />
-        </span>
-    }
-}
+// #[component]
+// pub fn UrlLink(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+//     view! {cx,
+//         <span
+//         type=PageNodeType::UrlLink.value()>
+//             <PageNodes nodes />
+//         </span>
+//     }
+// }
 
-#[component]
-pub fn FileLink(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::FileLink.value()>
-            <PageNodes nodes />
-        </span>
-    }
-}
+// #[component]
+// pub fn FileLink(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+//     view! {cx,
+//         <span
+//         type=PageNodeType::FileLink.value()>
+//             <PageNodes nodes />
+//         </span>
+//     }
+// }
 
-#[component]
-pub fn Highlight(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::Highlight.value()>
-            <PageNodes nodes />
-        </span>
-    }
-}
+// #[component]
+// pub fn Highlight(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+//     view! {cx,
+//         <span
+//         type=PageNodeType::Highlight.value()>
+//             <PageNodes nodes />
+//         </span>
+//     }
+// }
 
-#[component]
-pub fn Italic(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::Italic.value()>
-            <PageNodes nodes />
-        </span>
-    }
-}
+// #[component]
+// pub fn Italic(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+//     view! {cx,
+//         <span
+//         type=PageNodeType::Italic.value()>
+//             <PageNodes nodes />
+//         </span>
+//     }
+// }
 
-#[component]
-pub fn Bold(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::Bold.value()>
-            <PageNodes nodes />
-        </span>
-    }
-}
-
-#[component]
-pub fn Text(cx: Scope, content: RwSignal<HashMap<String, String>>) -> Element {
-    view! {cx,
-        <span
-        type=PageNodeType::RawText.value()>
-            {content.get().get("text").unwrap()}
-        </span>
-    }
-}
+// #[component]
+// pub fn Bold(cx: Scope, nodes: RwSignal<Vec<PageNode>>) -> Element {
+//     view! {cx,
+//         <span
+//         type=PageNodeType::Bold.value()>
+//             <PageNodes nodes />
+//         </span>
+//     }
+// }
 
 // #[derive(Debug, Clone, PartialEq)]
 // enum MDNodeType {
