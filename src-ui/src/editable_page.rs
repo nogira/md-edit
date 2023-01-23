@@ -45,8 +45,6 @@ pub struct Page {
     pub top_elem: RwSignal<EdgeElem>,
     pub bot_elem: RwSignal<EdgeElem>,
     pub locations: RwSignal<HashMap<String, Vec<usize>>>,
-    // FIXME: i think this was a failed attempt at something. delete and check funtionality the same
-    pub refresh_toggle: bool,
 }
 impl Page {
     fn signal_from(cx: Scope, nodes: RwSignal<Vec<RwSignal<PageNode>>>, 
@@ -54,7 +52,8 @@ impl Page {
         locations: RwSignal<HashMap<String, Vec<usize>>>
     ) -> RwSignal<Self> {
         let nodes_in_view = create_rw_signal(cx, Vec::new());
-        create_rw_signal(cx, Self {nodes, nodes_in_view, top_elem, bot_elem, locations, refresh_toggle: true}) 
+        create_rw_signal(cx, Self {nodes, nodes_in_view, top_elem, 
+            bot_elem, locations}) 
     }
 }
 /// the top or bottom element of the view
@@ -106,6 +105,12 @@ impl PageNode {
         create_rw_signal(cx, Self {hash, kind, contents, height})
     }
 }
+// struct RwSignal<T>()
+// impl Debug for RwSignal<PageNode> {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "RwSignal PageNode({:?}, {:?})", self.hash, self.kind)
+//     }
+// }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageNodeContents {
     Children(RwSignal<Vec<RwSignal<PageNode>>>), Content(RwSignal<HashMap<String, String>>)
@@ -241,13 +246,13 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
             }
         })
     });
-    fn add_hashes(page_data: RwSignal<Page>, nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>) {
+    fn add_hashes(nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>, 
+        locations: RwSignal<HashMap<String, Vec<usize>>>) {
         for (i, node) in nodes.iter().enumerate() {
             let mut location = location.clone();
             location.push(i);
             // create & add hash/location if not present
             if node.get().hash == "".to_string() {
-                let locations = page_data.get().locations;
                 let mut hash = rand_alphanumerecimal_hash();
                 loop {
                     if !locations.get().contains_key(&hash) { break }
@@ -256,24 +261,22 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 locations.update(|h| {
                     h.insert(hash.clone(), location.clone());
                 });
-                page_data.get().nodes.update(|v| {
-                    v[i].update(|e| e.hash = hash.clone())
-                });
+                nodes[i].update(|e| e.hash = hash.clone())
             }
             // if children present in node, update those too
             match node.get().contents {
                 PageNodeContents::Children(children) => {
-                    add_hashes(page_data, children.get(), location)
+                    add_hashes(children.get(), location, locations)
                 },
                 _ => {},
             }
         };
     }
-    add_hashes(page_data, page_data.get().nodes.get(), Vec::new());
-
+    add_hashes(page_data.get().nodes.get(), Vec::new(), page_data.get().locations);
 
     // ==init top/bot-elem==
     let mut top_hash = page_data.get().nodes.get()[0].get().hash;
+    console_log(&format!("top hash: {:?}", top_hash));
     let mut node = page_data.get().nodes.get()[0].get();
     loop {
         match node.contents {
@@ -287,11 +290,10 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                     node = first_child;
                 }
             }
-            PageNodeContents::Content(_) => {
-                break;
-            }
+            PageNodeContents::Content(_) => break,
         }
     }
+    console_log(&format!("top hash: {:?}", top_hash));
     page_data.get().top_elem.update(|e| {
         e.hash = top_hash.clone()
     });
@@ -300,36 +302,114 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     });
 
     // ==init nodes_in_view==
-    fn get_nodes_in_view(nodes: Vec<RwSignal<PageNode>>, 
+    fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>, 
         top_loc: &Vec<usize>, bot_loc: &Vec<usize>,
     ) -> Vec<RwSignal<PageNode>> {
         let mut vec = Vec::new();
         let mut iter = nodes.iter();
-        let start = top_loc[0];
-        // the end_hash if present
-        let end_hash = match bot_loc.get(0) {
-            Some(idx) => nodes[*idx].get().hash,
-            None => "".into(),
-        };
-        iter.advance_by(start).unwrap();
-        for node in iter {
-            let is_last_elem = node.get().hash == end_hash;
 
-            vec.push(*node);
-            if is_last_elem { break }
+        // if `top_loc[1]` = 0, this of course wouldn't be sliced, but can't 
+        // add that to this var bc if len is 3 you would need to check all 3, 
+        // if len was 4 you need to check all 4, etc, etc, which seems like 
+        // wasted effort when we can just let the loop check. this is simply a 
+        // quick preliminary check
+        let start_node_may_be_sliced = top_loc.len() > 1;
+        let end_node_may_be_sliced = top_loc.len() > 1;
+        // let a_node_may_be_sliced = start_node_may_be_sliced || end_node_may_be_sliced;
+
+        // if no index, it means e.g. start from beginning, or e.g. end at end
+        let start_idx = top_loc.get(0);
+        let end_idx = bot_loc.get(0);
+        if let Some(idx) = start_idx {
+            iter.advance_by(*idx).unwrap();
+        }
+        let mut idx = match start_idx {
+            Some(idx) => *idx,
+            None => 0,
+        };
+        for node in iter {
+            console_log(&format!("LOOP IDX: {:?}", idx));
+            console_log(&format!("NODE KIND: {:?}", node.get().kind));
+            console_log(&format!("VEC: {:?}", vec));
+            
+            let is_start_elem = idx == *start_idx.unwrap_or(&usize::MAX);
+            let is_end_elem = idx == *end_idx.unwrap_or(&usize::MAX);
+
+            let start_elem_and_may_be_sliced = is_start_elem && start_node_may_be_sliced;
+            let end_elem_and_may_be_sliced = is_end_elem && end_node_may_be_sliced;
+
+            // only start and end nodes are able to be sliced
+            if start_elem_and_may_be_sliced || end_elem_and_may_be_sliced {
+                let mut top_loc = top_loc.clone();
+                let mut bot_loc = bot_loc.clone();
+
+                if let PageNodeContents::Children(
+                    children_signal
+                ) = node.get().contents {
+
+                    if start_elem_and_may_be_sliced {
+                        top_loc.splice(0..1, []); // rm first elem so children in recursion get location in relation to their position
+                    // if this is not start elem, we must pass top_loc = &Vec::new() 
+                    // so the recursion doesn't get a start index
+                    } else { top_loc.clear() }
+                    if end_elem_and_may_be_sliced {
+                        bot_loc.splice(0..1, []); // rm first elem so children in recursion get location in relation to their position
+                    // if this is not end elem, we must pass bot_loc = &Vec::new()
+                    // so the recursion doesn't get an end index
+                    } else { bot_loc.clear() }
+    
+                    let child_nodes = get_nodes_in_view(
+                        cx, children_signal.get(), &top_loc, &bot_loc
+                    );
+                    // if this is not sliced (e.g. if top elem and all the 
+                    // children slice at 0), we check if it matches the 
+                    // children_signal so we don't have to create a new signal 
+                    // if we don't have to. if matches, its not actually 
+                    // sliced, so keep same signal
+
+                    // same ->  not a slice
+                    if child_nodes == children_signal.get() {
+                        vec.push(*node);
+                    // different ->  a slice
+                    } else {
+                        let mut node = node.get();
+                        node.contents = PageNodeContents::Children(
+                            create_rw_signal(cx, child_nodes)
+                        );
+                        vec.push(create_rw_signal(cx, node));
+                    }
+                } else {
+                    vec.push(*node);
+                }
+            // for nodes that aren't start node or end node, or if no nodes 
+            // are sliced, in both cases we can simply pass the entire node 
+            // (no need to create a new signal)
+            } else {
+                vec.push(*node);
+            }
+            if is_end_elem { break }
+            idx += 1;
         }
         vec
     }
-    let locations = page_data.get().locations.get();
-    let top_elem = locations.get(
-        &page_data.get().top_elem.get().hash
-    ).unwrap();
-    let bot_elem = locations.get(
-        &page_data.get().bot_elem.get().hash
-    ).unwrap();
-    page_data.get().nodes_in_view.set(get_nodes_in_view(
-        page_data.get().nodes.get(), top_elem, bot_elem
-    ));
+    fn update_nodes_in_view(cx: Scope, page_data: RwSignal<Page>) {
+        let locations = page_data.get().locations.get();
+        let top_elem = locations.get(
+            &page_data.get().top_elem.get().hash
+        ).unwrap();
+        let bot_elem = locations.get(
+            &page_data.get().bot_elem.get().hash
+        ).unwrap();
+        console_log(&format!("LOCATIONS: {:?}", locations));
+        console_log(&format!("TOP ELEM: {:?}", top_elem));
+        page_data.get().nodes_in_view.set(get_nodes_in_view(
+            cx, page_data.get().nodes.get(), top_elem, bot_elem
+        ));
+    }
+    // ==UPDATE NODES IN VIEW==
+    update_nodes_in_view(cx, page_data);
+
+    console_log(&format!("NUM NODES IN VIEW: {:?}", page_data.get().nodes_in_view.get().len()));
 
     // FIXME: THIS WILL NOT WORK BC IF I'M GETTING A SIGNAL TO NODE Vec::new(), 
     // IT ISN'T POSSIBLE TO THEN MODIFY THE CONTENTS (I.E. MAKE A SLICE OF ITS 
@@ -458,45 +538,99 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // on scroll/resize, update first/last-node, trigger reactive re-render
 
+    let init_render_toggle = create_rw_signal(cx, true);
+
+    // ==KEEP RERENDERING UNTIL EITHER BOT_ELEM IS ON THE BOTTOM EDGE OF THE 
+    // VIEW, OR IT IS THE LAST ELEMENT==
     create_effect(cx, move |_| {
+        console_log("RUNNING");
+        let refresh_toggle = init_render_toggle.get();
         if let Some(elem) = elem_ref.get() {
-           request_animation_frame(move || {
-               console_log(&format!("HEIGHT:: {:?}", elem.get_bounding_client_rect().height()));
-           });
+            request_animation_frame(move || {
+                let editor_bottom_edge = elem.get_bounding_client_rect().bottom();
+                let bot_elem_hash = page_data.get().bot_elem.get().hash;
+                console_log(&format!("hash for selector:: {:?}", bot_elem_hash));
+                // HASH CANNOT START WITH NUMBER LIKE THIS "[hash=29w8r]" BC 
+                // IT CRASHES QUERYSELECTOR. MUST USE "[hash=\"29w8r\"]" INSTEAD
+                let selector = format!("[hash=\"{}\"]", bot_elem_hash);
+                let bottom_elem = document().query_selector(&selector).unwrap().unwrap();
+                let bot_top_edge = bottom_elem.get_bounding_client_rect().top();
+                console_log(&format!("editor:: {:?}", editor_bottom_edge));
+                console_log(&format!("bottom elem:: {:?}", bot_top_edge));
+                if bot_top_edge < editor_bottom_edge {
+                    console_log("ELEM NOT AT BOTTOM");
+                    if let Some(next_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
+                        console_log(&format!("next hash: {:?}", next_hash));
+                        // update bot_hash, then update nodes_in_view to 
+                        // trigger re-render
+                        page_data.get().bot_elem.update(|e| e.hash = next_hash);
+                        update_nodes_in_view(cx, page_data);
+                        init_render_toggle.set(!refresh_toggle);
+                    };
+                }
+            });
         }
     });
 
-    // ==SET TOP_ELEM IF MISSING== // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP RUNNING EVERYTIME THE SIGNAL CHANGES
-    // need to run this post-render to make sure to top-elem has its hash
-    create_effect(cx, move |_| { request_animation_frame(move || {
-        page_data.update(|p| p.refresh_toggle = !p.refresh_toggle);
-        console_log("SET TOP_ELEM IF MISSING");
-        // crucial to set top_elem. bot_elem is set depending on window height, 
-        // so set that while rendering
-        if page_data.get().top_elem.get().hash == "".to_string() {
-            console_log("top_elem not set");
-            // there should ALWAYS be at least one root node, so this is safe
-            let mut top_node = page_data.get().nodes.get()[0].get();
-            loop {
-                // wanting to return the most nested top block element
-                match top_node.contents {
-                    PageNodeContents::Children(children) => {
-                        let temp_top_node = children.get()[0].get();
-                        // if child is not block, prev node is the last block, 
-                        // so break
-                        if !temp_top_node.kind.is_block() { break }
-                        top_node = temp_top_node;
-                    },
-                    PageNodeContents::Content(_) => {},
-                }
-            }
-            page_data.get().top_elem.update(|te| { te.hash = top_node.hash });
-            console_log(&format!("TOP NODE HASH: {:?}", page_data.get().top_elem.get().hash));
-        }
-        let top_hash = page_data.get().top_elem.get().hash;
-        console_log(&format!("TOP NODE IDX: {:?}", page_data.get().locations.get().get(&top_hash).unwrap()));
-    }); });
+    fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
+    ) -> Option<String> {
+        let mut location = page_data.get().locations.get()
+            .get(hash).unwrap().to_owned();
+        console_log(&format!("location: {:?}", location));
+        let nodes = page_data.get().nodes.get();
+        // first check next child (e.g. input location is [0, 2], so check [0, 3])
+        // then jump one level down and do same, etc until at base and still no 
+        // next elems
+        loop {
+            // create theoretical location of next child on same level
+            let loc_len = location.len();
+            location[loc_len - 1] += 1;
 
+            // * check if this location exists *
+            if let Some(next_hash) = get_hash_from_location(&location, &nodes) {
+                return Some(next_hash);
+            };
+
+            // jump one level down
+            location.pop().unwrap();
+            // if this is true, the input hash is already the last element
+            if location.len() == 0 { console_log("ALREADY LAST"); return None }
+        }
+    }
+    fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
+    ) -> Option<String> {
+        let mut node = match nodes.get(location[0]) {
+            Some(node) => node.clone(),
+            None => return None,
+        };
+        for idx in &location[1..] {
+            match node.get().contents {
+                PageNodeContents::Children(children) => {
+                    match children.get().get(*idx) {
+                        Some(child) => {
+                            node = child.clone();
+                        },
+                        None => return None,
+                    }
+                },
+                _ => { panic!("should never get here") },
+            }
+        }
+        Some(node.get().hash)
+    }
+
+    // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP 
+    // RUNNING EVERYTIME THE SIGNAL CHANGES
+    // need to run this post-render to make sure to top-elem has its hash
+    // create_effect(cx, move |_| { 
+    //     let toggle = page_data.get().refresh_toggle;
+    //     request_animation_frame(move || {
+    //     page_data.update(|p| p.refresh_toggle = !p.refresh_toggle);
+    //     console_log("SET TOP_ELEM IF MISSING");
+
+    //     console_log(&format!("{:?}", page_data.get().refresh_toggle));
+
+    // }); });
 
 
     // ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
@@ -532,7 +666,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         >
             <PageNodes
             page_data=page_data
-            nodes=page_data.get().nodes />
+            nodes=page_data.get().nodes_in_view />
         </div>
     }
 }
