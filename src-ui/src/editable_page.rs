@@ -1,10 +1,18 @@
-use std::{collections::{HashMap, hash_map::DefaultHasher}, hash::{Hash, Hasher, self}};
+use std::collections::HashMap;
 use core::{cmp::max, fmt::Debug};
-use leptos::{*, js_sys::Math};
+use leptos::{*, js_sys::{Math, Date}};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
 use web_sys::HtmlDivElement;
 // use src_ui::*;
+use super::{
+    Page, PageNode, PageNodeType, PageNodeContents, EdgeElem, add_hashes,
+    get_top_hash, update_nodes_in_view, get_hash_of_next_elem, get_hash_of_prev_elem,
+    get_node_from_hash, 
+};
+
+// TODO: CUSTOMIZABLE MARKDOWN SYNTAX. E.G. IF YOU WANT `/` FOR ITALICS YOU CAN 
+// JUST PICK IT
 
 /// pass in the element that has been updated, and update all elements IN_VIEW 
 /// below. we don't need to update ones out of view bc they will update when 
@@ -36,145 +44,7 @@ fn update_dims(start_elem: Vec<usize>) {
 // ok so i need to store the hash + path of all elements. this is to enable 
 // both selections, edits, and in-view rendering/rerendering
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Page {
-    pub nodes: RwSignal<Vec<RwSignal<PageNode>>>,
-    pub nodes_in_view:  RwSignal<Vec<RwSignal<PageNode>>>,
-    /// (hash, location, top)
-    /// also use this to calculate scroll position
-    pub top_elem: RwSignal<EdgeElem>,
-    pub bot_elem: RwSignal<EdgeElem>,
-    pub locations: RwSignal<HashMap<String, Vec<usize>>>,
-}
-impl Page {
-    fn signal_from(cx: Scope, nodes: RwSignal<Vec<RwSignal<PageNode>>>, 
-        top_elem: RwSignal<EdgeElem>, bot_elem: RwSignal<EdgeElem>, 
-        locations: RwSignal<HashMap<String, Vec<usize>>>
-    ) -> RwSignal<Self> {
-        let nodes_in_view = create_rw_signal(cx, Vec::new());
-        create_rw_signal(cx, Self {nodes, nodes_in_view, top_elem, 
-            bot_elem, locations}) 
-    }
-}
-/// the top or bottom element of the view
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EdgeElem {
-    // the hash/id of top element
-    pub hash: String,
-    // pub location: Vec<usize>, // location not needed bc can use hash to get it from hashset
-    /// - if top elem: top = `padding-top` attribute, bot elem: `padding-bot`
-    /// - padding is applied to the base node  (e.g. if node is `vec![1, 3, 2]`, 
-    /// padding applied to base node of index 1)
-    pub pad: u32,
-    /// - if top elem: bottom edge of the elem. once it passes over the top of 
-    /// the page + some px, it signals the element should be unrendered, and 
-    /// new top-elem chosen
-    pub inner_edge_y: i32,
-}
-impl EdgeElem {
-    fn from(hash: String, pad: u32, inner_edge_y: i32) -> Self {
-        Self {hash, pad, inner_edge_y}
-    }
-    fn signal_from(cx: Scope, hash: String, pad: u32, inner_edge_y: i32) -> RwSignal<Self> {
-        create_rw_signal(cx, Self {hash, pad, inner_edge_y})
-    }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageNode {
-    pub hash: String,
-    pub kind: PageNodeType,
-    pub contents: PageNodeContents,
-    /// height of all elems is tracked so we can have an accurate scroll page 
-    /// length without having to render the page down to the bottom
-    pub height: usize,
-    // /// the y-axis top of the element in pixels
-    // pub top: usize,
-    // /// the y-axis bottom of the element in pixels
-    // pub bottom: usize,
-}
-impl PageNode {
-    fn from(hash: String, kind: PageNodeType, 
-        contents: PageNodeContents, height: usize,
-    ) -> Self {
-        Self {hash, kind, contents, height}
-    }
-    fn signal_from(cx: Scope, hash: String, kind: PageNodeType, 
-        contents: PageNodeContents, height: usize,
-    ) -> RwSignal<Self> {
-        create_rw_signal(cx, Self {hash, kind, contents, height})
-    }
-}
-// struct RwSignal<T>()
-// impl Debug for RwSignal<PageNode> {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "RwSignal PageNode({:?}, {:?})", self.hash, self.kind)
-//     }
-// }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PageNodeContents {
-    Children(RwSignal<Vec<RwSignal<PageNode>>>), Content(RwSignal<HashMap<String, String>>)
-}
-impl PageNodeContents {
-    fn signal_from_children(cx: Scope, children: Vec<RwSignal<PageNode>>) -> Self {
-        Self::Children(create_rw_signal(cx, children))
-    }
-    fn signal_from_content(cx: Scope, content: HashMap<String, String>) -> Self {
-        Self::Content(create_rw_signal(cx, content))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PageNodeType {
-    // root
-    // Page, // using Page as root so able to attach a method to index node (as 
-          // otherwise you would have to first index the root RwSignal<Vec<PageNode>> 
-          // before runniing PageNode index method)
-    // block-branch
-    Quote,
-    // block-leaf
-    TextBlock, H1, H2, H3, CodeBlock,
-    // text-branch
-    Bold, Italic, Highlight, CodeInline, FileLink, UrlLink,
-    // text-leaf
-    RawText,
-}
-impl PageNodeType {
-    fn value(&self) -> &str {
-        match *self {
-            PageNodeType::Quote => "q",
-            PageNodeType::TextBlock => "tb",
-            PageNodeType::H1 => "h1",
-            PageNodeType::H2 => "h2",
-            PageNodeType::H3 => "h3",
-            PageNodeType::CodeBlock => "cb",
-            PageNodeType::Bold => "b",
-            PageNodeType::Italic => "i",
-            PageNodeType::Highlight => "h",
-            PageNodeType::CodeInline => "ci",
-            PageNodeType::FileLink => "fl",
-            PageNodeType::UrlLink => "ul",
-            PageNodeType::RawText => "t",
-        }
-    }
-    fn is_block(&self) -> bool {
-        match *self {
-            PageNodeType::Quote => true,
-            PageNodeType::TextBlock => true,
-            PageNodeType::H1 => true,
-            PageNodeType::H2 => true,
-            PageNodeType::H3 => true,
-            PageNodeType::CodeBlock => true,
-            PageNodeType::Bold => false,
-            PageNodeType::Italic => false,
-            PageNodeType::Highlight => false,
-            PageNodeType::CodeInline => false,
-            PageNodeType::FileLink => false,
-            PageNodeType::UrlLink => false,
-            PageNodeType::RawText => false,
-        }
-    }
-}
 
 // #[derive(Serialize)]
 // struct RetreiveFileCmdArgs {
@@ -246,184 +116,18 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
             }
         })
     });
-    fn add_hashes(nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>, 
-        locations: RwSignal<HashMap<String, Vec<usize>>>) {
-        for (i, node) in nodes.iter().enumerate() {
-            let mut location = location.clone();
-            location.push(i);
-            // create & add hash/location if not present
-            if node.get().hash == "".to_string() {
-                let mut hash = rand_alphanumerecimal_hash();
-                loop {
-                    if !locations.get().contains_key(&hash) { break }
-                    hash = rand_alphanumerecimal_hash();
-                }
-                locations.update(|h| {
-                    h.insert(hash.clone(), location.clone());
-                });
-                nodes[i].update(|e| e.hash = hash.clone())
-            }
-            // if children present in node, update those too
-            match node.get().contents {
-                PageNodeContents::Children(children) => {
-                    add_hashes(children.get(), location, locations)
-                },
-                _ => {},
-            }
-        };
-    }
     add_hashes(page_data.get().nodes.get(), Vec::new(), page_data.get().locations);
-
     // ==init top/bot-elem==
-    let mut top_hash = page_data.get().nodes.get()[0].get().hash;
-    console_log(&format!("top hash: {:?}", top_hash));
-    let mut node = page_data.get().nodes.get()[0].get();
-    loop {
-        match node.contents {
-            PageNodeContents::Children(children) => {
-                // if children are not blocks, this is the final block node
-                let first_child = children.get()[0].get();
-                if !children.get()[0].get().kind.is_block() {
-                    break;
-                } else {
-                    top_hash = node.hash;
-                    node = first_child;
-                }
-            }
-            PageNodeContents::Content(_) => break,
-        }
-    }
-    console_log(&format!("top hash: {:?}", top_hash));
-    page_data.get().top_elem.update(|e| {
-        e.hash = top_hash.clone()
-    });
-    page_data.get().bot_elem.update(|e| {
-        e.hash = top_hash
-    });
 
+    let top_hash = get_top_hash(&page_data.get().nodes.get());
+    // console_log(&format!("top hash: {:?}", top_hash));
+    page_data.get().top_elem.update(|e| e.hash = top_hash.clone());
+    page_data.get().bot_elem.update(|e| e.hash = top_hash);
     // ==init nodes_in_view==
-    fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>, 
-        top_loc: &Vec<usize>, bot_loc: &Vec<usize>,
-    ) -> Vec<RwSignal<PageNode>> {
-        let mut vec = Vec::new();
-        let mut iter = nodes.iter();
-
-        // if `top_loc[1]` = 0, this of course wouldn't be sliced, but can't 
-        // add that to this var bc if len is 3 you would need to check all 3, 
-        // if len was 4 you need to check all 4, etc, etc, which seems like 
-        // wasted effort when we can just let the loop check. this is simply a 
-        // quick preliminary check
-        let start_node_may_be_sliced = top_loc.len() > 1;
-        let end_node_may_be_sliced = top_loc.len() > 1;
-        // let a_node_may_be_sliced = start_node_may_be_sliced || end_node_may_be_sliced;
-
-        // if no index, it means e.g. start from beginning, or e.g. end at end
-        let start_idx = top_loc.get(0);
-        let end_idx = bot_loc.get(0);
-        if let Some(idx) = start_idx {
-            iter.advance_by(*idx).unwrap();
-        }
-        let mut idx = match start_idx {
-            Some(idx) => *idx,
-            None => 0,
-        };
-        for node in iter {
-            console_log(&format!("LOOP IDX: {:?}", idx));
-            console_log(&format!("NODE KIND: {:?}", node.get().kind));
-            console_log(&format!("VEC: {:?}", vec));
-            
-            let is_start_elem = idx == *start_idx.unwrap_or(&usize::MAX);
-            let is_end_elem = idx == *end_idx.unwrap_or(&usize::MAX);
-
-            let start_elem_and_may_be_sliced = is_start_elem && start_node_may_be_sliced;
-            let end_elem_and_may_be_sliced = is_end_elem && end_node_may_be_sliced;
-
-            // only start and end nodes are able to be sliced
-            if start_elem_and_may_be_sliced || end_elem_and_may_be_sliced {
-                let mut top_loc = top_loc.clone();
-                let mut bot_loc = bot_loc.clone();
-
-                if let PageNodeContents::Children(
-                    children_signal
-                ) = node.get().contents {
-
-                    if start_elem_and_may_be_sliced {
-                        top_loc.splice(0..1, []); // rm first elem so children in recursion get location in relation to their position
-                    // if this is not start elem, we must pass top_loc = &Vec::new() 
-                    // so the recursion doesn't get a start index
-                    } else { top_loc.clear() }
-                    if end_elem_and_may_be_sliced {
-                        bot_loc.splice(0..1, []); // rm first elem so children in recursion get location in relation to their position
-                    // if this is not end elem, we must pass bot_loc = &Vec::new()
-                    // so the recursion doesn't get an end index
-                    } else { bot_loc.clear() }
-    
-                    let child_nodes = get_nodes_in_view(
-                        cx, children_signal.get(), &top_loc, &bot_loc
-                    );
-                    // if this is not sliced (e.g. if top elem and all the 
-                    // children slice at 0), we check if it matches the 
-                    // children_signal so we don't have to create a new signal 
-                    // if we don't have to. if matches, its not actually 
-                    // sliced, so keep same signal
-
-                    // same ->  not a slice
-                    if child_nodes == children_signal.get() {
-                        vec.push(*node);
-                    // different ->  a slice
-                    } else {
-                        let mut node = node.get();
-                        node.contents = PageNodeContents::Children(
-                            create_rw_signal(cx, child_nodes)
-                        );
-                        vec.push(create_rw_signal(cx, node));
-                    }
-                } else {
-                    vec.push(*node);
-                }
-            // for nodes that aren't start node or end node, or if no nodes 
-            // are sliced, in both cases we can simply pass the entire node 
-            // (no need to create a new signal)
-            } else {
-                vec.push(*node);
-            }
-            if is_end_elem { break }
-            idx += 1;
-        }
-        vec
-    }
-    fn update_nodes_in_view(cx: Scope, page_data: RwSignal<Page>) {
-        let locations = page_data.get().locations.get();
-        let top_elem = locations.get(
-            &page_data.get().top_elem.get().hash
-        ).unwrap();
-        let bot_elem = locations.get(
-            &page_data.get().bot_elem.get().hash
-        ).unwrap();
-        console_log(&format!("LOCATIONS: {:?}", locations));
-        console_log(&format!("TOP ELEM: {:?}", top_elem));
-        page_data.get().nodes_in_view.set(get_nodes_in_view(
-            cx, page_data.get().nodes.get(), top_elem, bot_elem
-        ));
-    }
-    // ==UPDATE NODES IN VIEW==
     update_nodes_in_view(cx, page_data);
 
-    console_log(&format!("NUM NODES IN VIEW: {:?}", page_data.get().nodes_in_view.get().len()));
 
-    // FIXME: THIS WILL NOT WORK BC IF I'M GETTING A SIGNAL TO NODE Vec::new(), 
-    // IT ISN'T POSSIBLE TO THEN MODIFY THE CONTENTS (I.E. MAKE A SLICE OF ITS 
-    // CHILD NODES) BC THEN YOU'RE EITHER MODIFYING THE ORIGINAL DATA, OR 
-    // YOU'RE MAKING A COPY WHICH WE DON'T WANT TO DO
-    // i guess i must just make a copy of at least the block nodes for in-view 
-    // if i want to do this
-
-    // ok so lets start by doing rendering conditional upon being within view, 
-    // then appending hash to hashset if item is rendered
-    // hashset could either contain the path to the item, or a closure that contains an item.update(|i| *i = x)
-
-    // if i'm able to attach a message event to each node, i could send a 
-    // message by posting to the element looked up by hash (i.e. querySelector())
+    // console_log(&format!("NUM NODES IN VIEW: {:?}", page_data.get().nodes_in_view.get().len()));
 
     // let handle_keypress = move |event: web_sys::KeyboardEvent| {
 
@@ -543,81 +247,36 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     // ==KEEP RERENDERING UNTIL EITHER BOT_ELEM IS ON THE BOTTOM EDGE OF THE 
     // VIEW, OR IT IS THE LAST ELEMENT==
     create_effect(cx, move |_| {
-        console_log("RUNNING");
+        // console_log("RUNNING");
         let refresh_toggle = init_render_toggle.get();
         if let Some(elem) = elem_ref.get() {
             request_animation_frame(move || {
                 let editor_bottom_edge = elem.get_bounding_client_rect().bottom();
                 let bot_elem_hash = page_data.get().bot_elem.get().hash;
-                console_log(&format!("hash for selector:: {:?}", bot_elem_hash));
-                // HASH CANNOT START WITH NUMBER LIKE THIS "[hash=29w8r]" BC 
-                // IT CRASHES QUERYSELECTOR. MUST USE "[hash=\"29w8r\"]" INSTEAD
-                let selector = format!("[hash=\"{}\"]", bot_elem_hash);
-                let bottom_elem = document().query_selector(&selector).unwrap().unwrap();
+                // console_log(&format!("hash for selector:: {:?}", bot_elem_hash));
+                let bottom_elem = query_dom_page_node(&bot_elem_hash);
                 let bot_top_edge = bottom_elem.get_bounding_client_rect().top();
-                console_log(&format!("editor:: {:?}", editor_bottom_edge));
-                console_log(&format!("bottom elem:: {:?}", bot_top_edge));
+                // console_log(&format!("editor:: {:?}", editor_bottom_edge));
+                // console_log(&format!("bottom elem:: {:?}", bot_top_edge));
                 if bot_top_edge < editor_bottom_edge {
                     console_log("ELEM NOT AT BOTTOM");
                     if let Some(next_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
-                        console_log(&format!("next hash: {:?}", next_hash));
-                        // update bot_hash, then update nodes_in_view to 
-                        // trigger re-render
+                        // console_log(&format!("next hash: {:?}", next_hash));
+                        // update bot_elem hash
                         page_data.get().bot_elem.update(|e| e.hash = next_hash);
+                        // update nodes_in_view to trigger re-render
                         update_nodes_in_view(cx, page_data);
+                        // trigger refresh of this closure so bot_elem can 
+                        // change again if this is not the bottom element
                         init_render_toggle.set(!refresh_toggle);
                     };
                 }
             });
+        } else {
+            // this will be just the first run while the elem_ref is still 
+            // empty bc haven't yet executed the `_ref=` thing in the view
         }
     });
-
-    fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
-    ) -> Option<String> {
-        let mut location = page_data.get().locations.get()
-            .get(hash).unwrap().to_owned();
-        console_log(&format!("location: {:?}", location));
-        let nodes = page_data.get().nodes.get();
-        // first check next child (e.g. input location is [0, 2], so check [0, 3])
-        // then jump one level down and do same, etc until at base and still no 
-        // next elems
-        loop {
-            // create theoretical location of next child on same level
-            let loc_len = location.len();
-            location[loc_len - 1] += 1;
-
-            // * check if this location exists *
-            if let Some(next_hash) = get_hash_from_location(&location, &nodes) {
-                return Some(next_hash);
-            };
-
-            // jump one level down
-            location.pop().unwrap();
-            // if this is true, the input hash is already the last element
-            if location.len() == 0 { console_log("ALREADY LAST"); return None }
-        }
-    }
-    fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
-    ) -> Option<String> {
-        let mut node = match nodes.get(location[0]) {
-            Some(node) => node.clone(),
-            None => return None,
-        };
-        for idx in &location[1..] {
-            match node.get().contents {
-                PageNodeContents::Children(children) => {
-                    match children.get().get(*idx) {
-                        Some(child) => {
-                            node = child.clone();
-                        },
-                        None => return None,
-                    }
-                },
-                _ => { panic!("should never get here") },
-            }
-        }
-        Some(node.get().hash)
-    }
 
     // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP 
     // RUNNING EVERYTIME THE SIGNAL CHANGES
@@ -633,19 +292,124 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     // }); });
 
 
-    // ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
+    // TODO: ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
 
-
-
+    let scroll_throttle = create_rw_signal(cx, 0.0);
     let handle_scroll = move |event: web_sys::Event| {
+        // this is firing WAAAAAAAAY too quickly. so much so that if an element 
+        // from the top if removed, ALL elements immediately get removed before 
+        // the padding div is able to save them. thus, we need to throttle this 
+        // handler
+        // FIXME: WOOOOOOOOOOOOOOOOW THIS IS JANKY. back to the drawing board? render whole page at once?
+        let now = Date::now();
+        if now > scroll_throttle.get() + 300.0 {
+            console_log("YES");
+            scroll_throttle.set(now);
+        } else {
+            return;
+        }
+
         console_log("scroll");
+        let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
+        // let scroll_top = page_elem.scroll_top();
+        // console_log(&format!("SCROLL TOP: {:?}", scroll_top));
+        let page_top_edge = page_elem.get_bounding_client_rect().top();
+        let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
+
         let top_elem = page_data.get().top_elem.get();
         let bot_elem = page_data.get().bot_elem.get();
-        let elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
-        let scroll_top = elem.scroll_top();
-        console_log(&format!("SCROLL TOP: {:?}", scroll_top));
 
-        console_log(&format!("{:?}", document().query_selector("[type=t]").unwrap().unwrap().get_bounding_client_rect().top()));
+        const REMOVE_DISTANCE: f64 = 100.0;
+        const ADD_DISTANCE: f64 = 10.0;
+
+        let mut update_nodes = false;
+
+        let top_elem_hash = top_elem.hash;
+        let top_element = query_dom_page_node(&top_elem_hash);
+        let top_elem_bot_edge = top_element.get_bounding_client_rect().top();
+        // console_log(&format!("BOT of top_elem: {:?}", top_elem_bot_edge));
+        // if bot edge of top_elem is less than page_top_edge, we need to 
+        // render the element above it
+        if top_elem_bot_edge > page_top_edge - ADD_DISTANCE {
+            console_log("RENDER ONE ABOVE !!!");
+            if let Some(prev_elem_hash) = get_hash_of_prev_elem(&top_elem_hash, page_data) {
+                // update top_elem hash and pad
+                let height = get_node_from_hash(&prev_elem_hash, page_data)
+                    .unwrap().get().height;
+                page_data.get().top_elem.update(|e| {
+                    e.hash = prev_elem_hash;
+                    // rm previously added padding
+                    let total = e.pad as f64 - height as f64;
+                    e.pad = total as u32; // if total is negative it is converted to 0
+                });
+                // update nodes_in_view to trigger re-render
+                update_nodes = true;
+            };
+        // if bot edge of top_elem is greater than page_top_edge by 50px, we 
+        // need to remove the element
+        } else if top_elem_bot_edge < page_top_edge - REMOVE_DISTANCE {
+            console_log("REMOVE TOP");
+            // update height of node
+            let height = top_element.get_bounding_client_rect().height();
+            console_log(&format!("HEIGHT ADDED: {:?}", height));
+            let top_node = get_node_from_hash(&top_elem_hash, page_data).unwrap();
+            top_node.update(|n| n.height = height as u32);
+
+            if let Some(next_elem_hash) = get_hash_of_next_elem(&top_elem_hash, page_data) {
+                console_log(&format!("NEXT ELEM HASH: {:?}", next_elem_hash));
+                // update top_elem hash and pad
+                page_data.get().top_elem.update(|e| {
+                    e.hash = next_elem_hash.clone();
+                    let total = e.pad as f64 + height;
+                    e.pad = total as u32;
+                });
+                // update nodes_in_view to trigger re-render
+                update_nodes = true;
+            };
+        }
+
+        // FIXME: I JUST REALIZED THIS WAY OF RENDERING MIGHT FUCK UP IF I 
+        // SCROLL TOO FAST, OR MORE IMPORTANTLY IF I CLICK A SUBHEADING IN THE 
+        // OUTLINE OR CLICK THE BOTTOM OF THE PAGE ON THE SCROLLBAR AND IT 
+        // JUMPS STRAIGHT THERE WITHOUT GIVING IT TIME TO RENDER
+        // prob some ways to patch this, but i wonder if there is a better was 
+        // to render altogether 🤔
+        // TODO: 🚨🚨🚨🚨🚨 hmm actually, what if the editable page element is simply a 
+        // <div id="knfkd" />, and i give it a f-tonne of callbacks and such 
+        // (avoiding leptos rendering) 🚨🚨🚨🚨🚨
+
+        // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
+
+        let bot_elem_hash = bot_elem.hash;
+        let bot_element = query_dom_page_node(&bot_elem_hash);
+        let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
+        // console_log(&format!("TOP of bot_elem: {:?}", bot_elem_top_edge));
+        // if top edge of bot_elem is less than page_bot_edge, we need to 
+        // render the element below it
+        if bot_elem_top_edge < page_bot_edge + ADD_DISTANCE {
+            // console_log("RENDER ONE BELOW");
+            if let Some(next_elem_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
+                // update bot_elem hash
+                page_data.get().bot_elem.update(|e| e.hash = next_elem_hash);
+                // update nodes_in_view to trigger re-render
+                update_nodes = true;
+            };
+        // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
+        // need to remove the element
+        } else if bot_elem_top_edge > page_bot_edge + REMOVE_DISTANCE {
+            // console_log("REMOVE BOT");
+            if let Some(prev_elem_hash) = get_hash_of_prev_elem(&bot_elem_hash, page_data) {
+                // update bot_elem hash
+                page_data.get().bot_elem.update(|e| e.hash = prev_elem_hash);
+                // update nodes_in_view to trigger re-render
+                update_nodes = true;
+            };
+        }
+        // only call update_nodes_in_view once to speed things up
+        if update_nodes {
+            // update nodes_in_view to trigger re-render
+            update_nodes_in_view(cx, page_data);
+        }
     };
 
     // create_effect(cx, move |_| {
@@ -664,6 +428,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // on:keydown=handle_keypress
         _ref=elem_ref
         >
+            <div contenteditable="false" style=move ||{ format!("height: {}", page_data.get().top_elem.get().pad)} />
             <PageNodes
             page_data=page_data
             nodes=page_data.get().nodes_in_view />
@@ -671,48 +436,16 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     }
 }
 
+/// query a PageNode element from the DOM by its hash
+fn query_dom_page_node(hash: &String) -> web_sys::Element {
+    // HASH CANNOT START WITH NUMBER LIKE THIS "[hash=29w8r]" BC IT CRASHES 
+    // QUERYSELECTOR. MUST USE "[hash=\"29w8r\"]" INSTEAD
+    let selector = format!("[hash=\"{}\"]", hash);
+    document().query_selector(&selector).unwrap().unwrap()
+}
+
 // TODO: if compare doesn't work to find the number of the child, use the hash after-all, purely for unique child-nodes. ohhhh wait this wouldn't work bc i'm not rendering all the nodes to the page. MAYBE BETTER TO JUST SAY FUCK REACTVITY AND RE-RENDER ALL VISIBLE (AT LEAST ALL THAT NEED TO UPDATE INDEXES) WHEN UPDATE OCCURS
 
-/// generate an alphanumeric hash string of length 5
-fn rand_alphanumerecimal_hash() -> String {
-    // chars used: 26 a-z, 10 0-9 -> 36
-    // 36^4 = 1.67 million (1.67 million perhaps too small ?)
-    // 36^5 = 60.4 million <--
-    // 
-    // generated random number: u64 = 2^64 = 18.4 quintillion
-    // 2^32 = 4.29 billion
-    // 2^16 = 65k
-    // 2^26 = 67.1 million <--
-    let gen_rand_num = || {
-        let mut hasher = DefaultHasher::new();
-        Math::random().to_bits().hash(&mut hasher);
-        let bits_32 = hasher.finish() as u32;
-        // 32 - 26 = 6
-        let clipper = u32::MAX >> 6;
-        let clipped = bits_32 & clipper;
-        clipped
-    };
-    const MAX: u32 = 36_u32.pow(5) - 1;
-    const BASE: u32 = 36_u32;
-    loop {
-        let mut hash_str = String::new();
-        let mut carry = gen_rand_num();
-        if carry <= MAX {
-            loop {
-                let rem = carry % BASE;
-                if rem < 10 { hash_str.push_str(&format!("{}", rem)) }
-                // `'a' == 97 as char`
-                else { hash_str.push(char::from_u32(rem + 87).unwrap()) }
-
-                if carry == rem {
-                    return hash_str
-                } else {
-                    carry = (carry - rem) / BASE;
-                }
-            }
-        }
-    }
-}
 
 // TODO: make the key/id a microhash string (like 4 char long?) and store the 
 // paths to each microhash, so e.g. if click an elem, the click registers and 
