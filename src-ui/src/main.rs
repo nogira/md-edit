@@ -11,8 +11,8 @@ pub fn main() {
     console_error_panic_hook::set_once();
     mount_to_body(|cx| view! { cx, 
         <div style="position: fixed">
-            // <EditablePage />
-            <Main />
+            <EditablePage />
+            // <Main />
         </div>
     })
 }
@@ -74,7 +74,9 @@ pub fn Main(cx: Scope) -> impl IntoView {
         <br />
         <For each=current_items key=move|e| e.get().id
         view=move |e| {
+            console_log(&format!("1. RERENDERING: {}", e.get().id)); // THIS TRIGGERS ON RE-RENDER
             view! {cx,
+                {console_log(&format!("2. RERENDERING: {}", e.get().id));} // THIS TRIGGERS ON RE-RENDER
                 <div id=e.get().id>
                     {e.get().text.clone()}
                 </div>

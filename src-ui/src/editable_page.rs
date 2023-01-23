@@ -6,9 +6,6 @@ use tauri_sys::{event, tauri};
 use web_sys::HtmlDivElement;
 // use src_ui::*;
 
-// FIXME: CURRENTLY BOTTLENECKED BY NOT BEING ABLE TO GET THE SIZE OF AN 
-// ELEMENT ==AFTER== IT HAS BEEN RENDERED TO THE DOM
-
 /// pass in the element that has been updated, and update all elements IN_VIEW 
 /// below. we don't need to update ones out of view bc they will update when 
 /// we scroll down to them
@@ -41,8 +38,8 @@ fn update_dims(start_elem: Vec<usize>) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-    pub nodes: RwSignal<Vec<PageNode>>,
-    // pub nodes_in_view:  RwSignal<Vec<PageNode>>,
+    pub nodes: RwSignal<Vec<RwSignal<PageNode>>>,
+    pub nodes_in_view:  RwSignal<Vec<RwSignal<PageNode>>>,
     /// (hash, location, top)
     /// also use this to calculate scroll position
     pub top_elem: RwSignal<EdgeElem>,
@@ -52,11 +49,12 @@ pub struct Page {
     pub refresh_toggle: bool,
 }
 impl Page {
-    fn signal_from(cx: Scope, nodes: RwSignal<Vec<PageNode>>, 
+    fn signal_from(cx: Scope, nodes: RwSignal<Vec<RwSignal<PageNode>>>, 
         top_elem: RwSignal<EdgeElem>, bot_elem: RwSignal<EdgeElem>, 
         locations: RwSignal<HashMap<String, Vec<usize>>>
     ) -> RwSignal<Self> {
-        create_rw_signal(cx, Self {nodes, top_elem, bot_elem, locations, refresh_toggle: true}) 
+        let nodes_in_view = create_rw_signal(cx, Vec::new());
+        create_rw_signal(cx, Self {nodes, nodes_in_view, top_elem, bot_elem, locations, refresh_toggle: true}) 
     }
 }
 /// the top or bottom element of the view
@@ -102,13 +100,18 @@ impl PageNode {
     ) -> Self {
         Self {hash, kind, contents, height}
     }
+    fn signal_from(cx: Scope, hash: String, kind: PageNodeType, 
+        contents: PageNodeContents, height: usize,
+    ) -> RwSignal<Self> {
+        create_rw_signal(cx, Self {hash, kind, contents, height})
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageNodeContents {
-    Children(RwSignal<Vec<PageNode>>), Content(RwSignal<HashMap<String, String>>)
+    Children(RwSignal<Vec<RwSignal<PageNode>>>), Content(RwSignal<HashMap<String, String>>)
 }
 impl PageNodeContents {
-    fn signal_from_children(cx: Scope, children: Vec<PageNode>) -> Self {
+    fn signal_from_children(cx: Scope, children: Vec<RwSignal<PageNode>>) -> Self {
         Self::Children(create_rw_signal(cx, children))
     }
     fn signal_from_content(cx: Scope, content: HashMap<String, String>) -> Self {
@@ -205,11 +208,11 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     page_data.update(|p| {
         p.nodes.update(|n| {
             for _ in 0..5 {
-                n.push(PageNode::from(
+                n.push(PageNode::signal_from(cx,
                     "".into(), PageNodeType::H1,
                     PageNodeContents::signal_from_children(
                         cx, vec![
-                            PageNode::from(
+                            PageNode::signal_from(cx,
                                 "".into(), PageNodeType::RawText,
                                 PageNodeContents::signal_from_content(
                                     cx, HashMap::from([
@@ -220,11 +223,11 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                         ]
                     ), 0
                 ));
-                n.push(PageNode::from(
+                n.push(PageNode::signal_from(cx,
                     "".into(), PageNodeType::TextBlock,
                     PageNodeContents::signal_from_children(
                         cx, vec![
-                            PageNode::from(
+                            PageNode::signal_from(cx,
                                 "".into(), PageNodeType::RawText,
                                 PageNodeContents::signal_from_content(
                                     cx, HashMap::from([
@@ -238,10 +241,102 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
             }
         })
     });
+    fn add_hashes(page_data: RwSignal<Page>, nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>) {
+        for (i, node) in nodes.iter().enumerate() {
+            let mut location = location.clone();
+            location.push(i);
+            // create & add hash/location if not present
+            if node.get().hash == "".to_string() {
+                let locations = page_data.get().locations;
+                let mut hash = rand_alphanumerecimal_hash();
+                loop {
+                    if !locations.get().contains_key(&hash) { break }
+                    hash = rand_alphanumerecimal_hash();
+                }
+                locations.update(|h| {
+                    h.insert(hash.clone(), location.clone());
+                });
+                page_data.get().nodes.update(|v| {
+                    v[i].update(|e| e.hash = hash.clone())
+                });
+            }
+            // if children present in node, update those too
+            match node.get().contents {
+                PageNodeContents::Children(children) => {
+                    add_hashes(page_data, children.get(), location)
+                },
+                _ => {},
+            }
+        };
+    }
+    add_hashes(page_data, page_data.get().nodes.get(), Vec::new());
 
-    // TODO: init top/bot-elem
 
+    // ==init top/bot-elem==
+    let mut top_hash = page_data.get().nodes.get()[0].get().hash;
+    let mut node = page_data.get().nodes.get()[0].get();
+    loop {
+        match node.contents {
+            PageNodeContents::Children(children) => {
+                // if children are not blocks, this is the final block node
+                let first_child = children.get()[0].get();
+                if !children.get()[0].get().kind.is_block() {
+                    break;
+                } else {
+                    top_hash = node.hash;
+                    node = first_child;
+                }
+            }
+            PageNodeContents::Content(_) => {
+                break;
+            }
+        }
+    }
+    page_data.get().top_elem.update(|e| {
+        e.hash = top_hash.clone()
+    });
+    page_data.get().bot_elem.update(|e| {
+        e.hash = top_hash
+    });
 
+    // ==init nodes_in_view==
+    fn get_nodes_in_view(nodes: Vec<RwSignal<PageNode>>, 
+        top_loc: &Vec<usize>, bot_loc: &Vec<usize>,
+    ) -> Vec<RwSignal<PageNode>> {
+        let mut vec = Vec::new();
+        let mut iter = nodes.iter();
+        let start = top_loc[0];
+        // the end_hash if present
+        let end_hash = match bot_loc.get(0) {
+            Some(idx) => nodes[*idx].get().hash,
+            None => "".into(),
+        };
+        iter.advance_by(start).unwrap();
+        for node in iter {
+            let is_last_elem = node.get().hash == end_hash;
+
+            vec.push(*node);
+            if is_last_elem { break }
+        }
+        vec
+    }
+    let locations = page_data.get().locations.get();
+    let top_elem = locations.get(
+        &page_data.get().top_elem.get().hash
+    ).unwrap();
+    let bot_elem = locations.get(
+        &page_data.get().bot_elem.get().hash
+    ).unwrap();
+    page_data.get().nodes_in_view.set(get_nodes_in_view(
+        page_data.get().nodes.get(), top_elem, bot_elem
+    ));
+
+    // FIXME: THIS WILL NOT WORK BC IF I'M GETTING A SIGNAL TO NODE Vec::new(), 
+    // IT ISN'T POSSIBLE TO THEN MODIFY THE CONTENTS (I.E. MAKE A SLICE OF ITS 
+    // CHILD NODES) BC THEN YOU'RE EITHER MODIFYING THE ORIGINAL DATA, OR 
+    // YOU'RE MAKING A COPY WHICH WE DON'T WANT TO DO
+    // i guess i must just make a copy of at least the block nodes for in-view 
+    // if i want to do this
 
     // ok so lets start by doing rendering conditional upon being within view, 
     // then appending hash to hashset if item is rendered
@@ -381,12 +476,12 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         if page_data.get().top_elem.get().hash == "".to_string() {
             console_log("top_elem not set");
             // there should ALWAYS be at least one root node, so this is safe
-            let mut top_node = page_data.get().nodes.get()[0].clone();
+            let mut top_node = page_data.get().nodes.get()[0].get();
             loop {
                 // wanting to return the most nested top block element
                 match top_node.contents {
                     PageNodeContents::Children(children) => {
-                        let temp_top_node = children.get()[0].clone();
+                        let temp_top_node = children.get()[0].get();
                         // if child is not block, prev node is the last block, 
                         // so break
                         if !temp_top_node.kind.is_block() { break }
@@ -437,8 +532,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         >
             <PageNodes
             page_data=page_data
-            nodes=page_data.get().nodes
-            location=Vec::new() />
+            nodes=page_data.get().nodes />
         </div>
     }
 }
@@ -511,96 +605,18 @@ fn rand_alphanumerecimal_hash() -> String {
 // digestMessage(text)
 //   .then((digestHex) => console.log(digestHex));
 
+
+// TODO: 
+/// update all hash postions for all nodes in the level post-insert/delete
+fn update_positions() {
+
+}
+
 #[component]
 pub fn PageNodes(cx: Scope,
     page_data: RwSignal<Page>,
-    nodes: RwSignal<Vec<PageNode>>,
-    location: Vec<usize>,
+    nodes: RwSignal<Vec<RwSignal<PageNode>>>,
 ) -> impl IntoView {
-    let mut elems: Vec<HtmlElement<AnyElement>> = Vec::new();
-
-    console_log(&format!("{:?}", page_data.get().locations.get()));
-
-    // create_effect(cx, )
-
-    // need to start rending at the starting node
-    let start_idx = match page_data.get().top_elem.get().hash.as_str() {
-        "" => 0,
-        top_hash => {
-            let nest_lvl = location.len();
-            page_data.get().locations.get().get(top_hash).unwrap()[nest_lvl]
-        },
-    };
-
-    let iter_nodes = nodes.get();
-    let mut iter = iter_nodes.iter();
-    iter.advance_by(start_idx).unwrap();
-    for (i, node) in iter.enumerate() {
-        let mut location = location.clone();
-        location.push(i);
-
-        let mut node_hash = node.hash.clone();
-
-        // create & add hash/location if not present
-        if node_hash == "".to_string() {
-            let locations = page_data.get().locations;
-            let mut hash = rand_alphanumerecimal_hash();
-            loop {
-                if !locations.get().contains_key(&hash) { break }
-                hash = rand_alphanumerecimal_hash();
-            }
-            locations.update(|h| {
-                h.insert(hash.clone(), location.clone());
-            });
-            nodes.update(|v| { v[i].hash = hash.clone() });
-            // need to also update local hash var bc it was taken from node which uses an old read
-            node_hash = hash;
-        }
-
-        let elem = match node.contents {
-            PageNodeContents::Children(nodes) => {
-                match node.kind {
-                    PageNodeType::H1 => view! {cx,
-                        <div //contenteditable
-                        type=PageNodeType::H1.value()
-                        hash=node_hash>
-                            <PageNodes page_data nodes location />
-                        </div>
-                    },
-                    PageNodeType::TextBlock => view! {cx,
-                        <div
-                        type=PageNodeType::TextBlock.value()
-                        hash=&node.hash>
-                            <PageNodes page_data nodes location />
-                        </div>
-                    },
-                    _ => view! {cx,
-                        <div hash=node_hash>"‼️ block missing"</div>
-                    },
-                }.into_any()
-            }
-            PageNodeContents::Content(content) => {
-                match node.kind {
-                    PageNodeType::RawText => view! {cx,
-                        <span
-                        type=PageNodeType::RawText.value()
-                        hash=node_hash>
-                            {content.get().get("text").unwrap()}
-                        </span>
-                    },
-                    _ => view! {cx,
-                        <span
-                        type=PageNodeType::RawText.value()
-                        hash=node_hash>
-                            "‼️ only raw text allowed"
-                        </span>
-                    },
-                }.into_any()
-            }
-        };
-        elems.push(elem);
-    }
-    elems
 
     // TODO: COMMIT, THEN TEST CONVERSION TO <FOR />. IF THE UPDATING FROM 
     // SCROLLING IS NOT REACTIVE, REVERT MOST CHANGES AND DO MANUAL DOM 
@@ -610,12 +626,53 @@ pub fn PageNodes(cx: Scope,
     // view!{} so it executes on every update, OR, leave this function as an 
     // init component, and update the DOM directly in the scroll-handler
 
-    // view! {cx,
-    //     {
-    //         let vec = vec![1, 2, 3, 4];
-    //         elems
-    //     }
-    // }
+    view! {cx,
+        <For each=nodes key=|n| n.get().hash view=move |node| {
+            let node = node.get();
+            let node_hash = node.hash.clone();
+            match node.contents {
+                PageNodeContents::Children(nodes) => {
+                    match node.kind {
+                        PageNodeType::H1 => view! {cx,
+                            <div //contenteditable
+                            type=PageNodeType::H1.value()
+                            hash=node_hash>
+                                <PageNodes page_data nodes  />
+                            </div>
+                        },
+                        PageNodeType::TextBlock => view! {cx,
+                            <div
+                            type=PageNodeType::TextBlock.value()
+                            hash=&node.hash>
+                                <PageNodes page_data nodes  />
+                            </div>
+                        },
+                        _ => view! {cx,
+                            <div hash=node_hash>"‼️ block missing"</div>
+                        },
+                    }.into_any()
+                }
+                PageNodeContents::Content(content) => {
+                    match node.kind {
+                        PageNodeType::RawText => view! {cx,
+                            <span
+                            type=PageNodeType::RawText.value()
+                            hash=node_hash>
+                                {content.get().get("text").unwrap()}
+                            </span>
+                        },
+                        _ => view! {cx,
+                            <span
+                            type=PageNodeType::RawText.value()
+                            hash=node_hash>
+                                "‼️ only raw text allowed"
+                            </span>
+                        },
+                    }.into_any()
+                }
+            }
+        }/>
+    }
 }
 
 // #[component]
