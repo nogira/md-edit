@@ -3,7 +3,7 @@ use core::{cmp::max, fmt::Debug};
 use leptos::{*, js_sys::Math};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
-// use web_sys::Element;
+use web_sys::HtmlDivElement;
 // use src_ui::*;
 
 // FIXME: CURRENTLY BOTTLENECKED BY NOT BEING ABLE TO GET THE SIZE OF AN 
@@ -42,10 +42,45 @@ fn update_dims(start_elem: Vec<usize>) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub nodes: RwSignal<Vec<PageNode>>,
+    // pub nodes_in_view:  RwSignal<Vec<PageNode>>,
     /// (hash, location, top)
     /// also use this to calculate scroll position
-    pub top_elem: RwSignal<(String, Vec<usize>, usize)>,
+    pub top_elem: RwSignal<EdgeElem>,
+    pub bot_elem: RwSignal<EdgeElem>,
     pub locations: RwSignal<HashMap<String, Vec<usize>>>,
+    // FIXME: i think this was a failed attempt at something. delete and check funtionality the same
+    pub refresh_toggle: bool,
+}
+impl Page {
+    fn signal_from(cx: Scope, nodes: RwSignal<Vec<PageNode>>, 
+        top_elem: RwSignal<EdgeElem>, bot_elem: RwSignal<EdgeElem>, 
+        locations: RwSignal<HashMap<String, Vec<usize>>>
+    ) -> RwSignal<Self> {
+        create_rw_signal(cx, Self {nodes, top_elem, bot_elem, locations, refresh_toggle: true}) 
+    }
+}
+/// the top or bottom element of the view
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EdgeElem {
+    // the hash/id of top element
+    pub hash: String,
+    // pub location: Vec<usize>, // location not needed bc can use hash to get it from hashset
+    /// - if top elem: top = `padding-top` attribute, bot elem: `padding-bot`
+    /// - padding is applied to the base node  (e.g. if node is `vec![1, 3, 2]`, 
+    /// padding applied to base node of index 1)
+    pub pad: u32,
+    /// - if top elem: bottom edge of the elem. once it passes over the top of 
+    /// the page + some px, it signals the element should be unrendered, and 
+    /// new top-elem chosen
+    pub inner_edge_y: i32,
+}
+impl EdgeElem {
+    fn from(hash: String, pad: u32, inner_edge_y: i32) -> Self {
+        Self {hash, pad, inner_edge_y}
+    }
+    fn signal_from(cx: Scope, hash: String, pad: u32, inner_edge_y: i32) -> RwSignal<Self> {
+        create_rw_signal(cx, Self {hash, pad, inner_edge_y})
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,14 +88,32 @@ pub struct PageNode {
     pub hash: String,
     pub kind: PageNodeType,
     pub contents: PageNodeContents,
+    /// height of all elems is tracked so we can have an accurate scroll page 
+    /// length without having to render the page down to the bottom
+    pub height: usize,
     // /// the y-axis top of the element in pixels
     // pub top: usize,
     // /// the y-axis bottom of the element in pixels
     // pub bottom: usize,
 }
+impl PageNode {
+    fn from(hash: String, kind: PageNodeType, 
+        contents: PageNodeContents, height: usize,
+    ) -> Self {
+        Self {hash, kind, contents, height}
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageNodeContents {
     Children(RwSignal<Vec<PageNode>>), Content(RwSignal<HashMap<String, String>>)
+}
+impl PageNodeContents {
+    fn signal_from_children(cx: Scope, children: Vec<PageNode>) -> Self {
+        Self::Children(create_rw_signal(cx, children))
+    }
+    fn signal_from_content(cx: Scope, content: HashMap<String, String>) -> Self {
+        Self::Content(create_rw_signal(cx, content))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +149,23 @@ impl PageNodeType {
             PageNodeType::RawText => "t",
         }
     }
+    fn is_block(&self) -> bool {
+        match *self {
+            PageNodeType::Quote => true,
+            PageNodeType::TextBlock => true,
+            PageNodeType::H1 => true,
+            PageNodeType::H2 => true,
+            PageNodeType::H3 => true,
+            PageNodeType::CodeBlock => true,
+            PageNodeType::Bold => false,
+            PageNodeType::Italic => false,
+            PageNodeType::Highlight => false,
+            PageNodeType::CodeInline => false,
+            PageNodeType::FileLink => false,
+            PageNodeType::UrlLink => false,
+            PageNodeType::RawText => false,
+        }
+    }
 }
 
 // #[derive(Serialize)]
@@ -126,37 +196,56 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // TODO: * load in a Vec<PageNode> from file (same structure but w/o the RwSignal) *
 
-    let page_data: RwSignal<Page> = create_rw_signal(cx,
-        Page { nodes: create_rw_signal(cx, vec![
-            PageNode {
-                hash: "".into(), kind: PageNodeType::H1, contents: PageNodeContents::Children(
-                    create_rw_signal(cx,vec![
-                        PageNode {
-                            hash: "".into(), kind: PageNodeType::RawText, contents: PageNodeContents::Content(
-                                create_rw_signal(cx,HashMap::from([("text".to_string(), "some text".to_string())]))
-                            )
-                        }
-                    ])
-                )
-            },
-            PageNode {
-                hash: "".into(), kind: PageNodeType::TextBlock, contents: PageNodeContents::Children(
-                    create_rw_signal(cx,vec![
-                        PageNode {
-                            hash: "".into(), kind: PageNodeType::RawText, contents: PageNodeContents::Content(
-                                create_rw_signal(cx,HashMap::from([("text".to_string(), "some text".to_string())]))
-                            )
-                        }
-                    ])
-                )
-            }
-        ]), top_elem: create_rw_signal(cx, ("".into(), Vec::new(), 0))
-        , locations: create_rw_signal(cx, HashMap::new())}
+    let page_data: RwSignal<Page> = Page::signal_from(cx,
+        create_rw_signal(cx, Vec::new()),
+        EdgeElem::signal_from(cx, "".into(), 0, 0),
+        EdgeElem::signal_from(cx, "".into(), 0, 0),
+        create_rw_signal(cx, HashMap::new()),
     );
+    page_data.update(|p| {
+        p.nodes.update(|n| {
+            for _ in 0..5 {
+                n.push(PageNode::from(
+                    "".into(), PageNodeType::H1,
+                    PageNodeContents::signal_from_children(
+                        cx, vec![
+                            PageNode::from(
+                                "".into(), PageNodeType::RawText,
+                                PageNodeContents::signal_from_content(
+                                    cx, HashMap::from([
+                                        ("text".to_string(), "some text".to_string())
+                                    ])
+                                ), 0
+                            )
+                        ]
+                    ), 0
+                ));
+                n.push(PageNode::from(
+                    "".into(), PageNodeType::TextBlock,
+                    PageNodeContents::signal_from_children(
+                        cx, vec![
+                            PageNode::from(
+                                "".into(), PageNodeType::RawText,
+                                PageNodeContents::signal_from_content(
+                                    cx, HashMap::from([
+                                        ("text".to_string(), "some text".to_string())
+                                    ])
+                                ), 0
+                            )
+                        ]
+                    ), 0
+                ));
+            }
+        })
+    });
+
+    // TODO: init top/bot-elem
+
+
 
     // ok so lets start by doing rendering conditional upon being within view, 
     // then appending hash to hashset if item is rendered
-    // hashet could either contain the path to the item, or a closure that contains an item.update(|i| *i = x)
+    // hashset could either contain the path to the item, or a closure that contains an item.update(|i| *i = x)
 
     // if i'm able to attach a message event to each node, i could send a 
     // message by posting to the element looked up by hash (i.e. querySelector())
@@ -249,31 +338,107 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     //     }
     // };
 
-    rand_alphanumerecimal_hash();
-    // console_log(rand_alphanumerecimal_hash().as_str());
+    // on-load render and get the height of 
 
-    // console_log(&format!("HIEGHT: {:?}", page.get_box_quads()));
+    // on-render, update height. don't worry about bottom items. they will 
+    // update once scrolled down to and then never have to have a weird scroll 
+    // again
+    // if an item changes it will re-render, and thus update its height
+    //
+    // only need to get height for leaf blocks, height of branches will not be 
+    // set, instead relying on their set padding values to add to the total 
+    // height calculation
+    // thus, we would also need to make sure that branch blocks do not contain 
+    // any raw text, instead must contain e.g. H1, but default text box
 
-    // on_mounted
+    let elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
+
+    // TODO: ⬇️⬇️⬇️⬇️
+
+    // always render new page from the top
+
+    // init first-node and last-node in view to zero
+    // render node -> if node is not last, get next node, update last-node, 
+    // trigger reactive re-render, 
+
+    // on scroll/resize, update first/last-node, trigger reactive re-render
+
+    create_effect(cx, move |_| {
+        if let Some(elem) = elem_ref.get() {
+           request_animation_frame(move || {
+               console_log(&format!("HEIGHT:: {:?}", elem.get_bounding_client_rect().height()));
+           });
+        }
+    });
+
+    // ==SET TOP_ELEM IF MISSING== // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP RUNNING EVERYTIME THE SIGNAL CHANGES
+    // need to run this post-render to make sure to top-elem has its hash
+    create_effect(cx, move |_| { request_animation_frame(move || {
+        page_data.update(|p| p.refresh_toggle = !p.refresh_toggle);
+        console_log("SET TOP_ELEM IF MISSING");
+        // crucial to set top_elem. bot_elem is set depending on window height, 
+        // so set that while rendering
+        if page_data.get().top_elem.get().hash == "".to_string() {
+            console_log("top_elem not set");
+            // there should ALWAYS be at least one root node, so this is safe
+            let mut top_node = page_data.get().nodes.get()[0].clone();
+            loop {
+                // wanting to return the most nested top block element
+                match top_node.contents {
+                    PageNodeContents::Children(children) => {
+                        let temp_top_node = children.get()[0].clone();
+                        // if child is not block, prev node is the last block, 
+                        // so break
+                        if !temp_top_node.kind.is_block() { break }
+                        top_node = temp_top_node;
+                    },
+                    PageNodeContents::Content(_) => {},
+                }
+            }
+            page_data.get().top_elem.update(|te| { te.hash = top_node.hash });
+            console_log(&format!("TOP NODE HASH: {:?}", page_data.get().top_elem.get().hash));
+        }
+        let top_hash = page_data.get().top_elem.get().hash;
+        console_log(&format!("TOP NODE IDX: {:?}", page_data.get().locations.get().get(&top_hash).unwrap()));
+    }); });
+
+
+
+    // ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
+
+
+
+    let handle_scroll = move |event: web_sys::Event| {
+        console_log("scroll");
+        let top_elem = page_data.get().top_elem.get();
+        let bot_elem = page_data.get().bot_elem.get();
+        let elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
+        let scroll_top = elem.scroll_top();
+        console_log(&format!("SCROLL TOP: {:?}", scroll_top));
+
+        console_log(&format!("{:?}", document().query_selector("[type=t]").unwrap().unwrap().get_bounding_client_rect().top()));
+    };
 
     // create_effect(cx, move |_| {
-    //     console_log("hello");
-    //     if let Some(elem) = document().query_selector("[type=page]").unwrap() {
-    //         console_log(&format!("{:?}", elem.get_box_quads()));
-    //     };
+    //     request_animation_frame(move || {
+    //         console_log(&format!("{:?}", document().query_selector("[type=t]").unwrap().unwrap().get_bounding_client_rect().top()));
+    //     });
     // });
-    // create_effect
+
+    // prob better to alter `padding` of top root elem instead of `top` (bc i dont think `top`/`bottom` would work)
 
     view! {cx,
         <div contenteditable
+        style="overflow-y: auto; height:150px;"
         type="page"
-        on:scroll=|_| console_log("scroll")
+        on:scroll=handle_scroll
         // on:keydown=handle_keypress
+        _ref=elem_ref
         >
             <PageNodes
+            page_data=page_data
             nodes=page_data.get().nodes
-            location=Vec::new()
-            hashes=page_data.get().locations />
+            location=Vec::new() />
         </div>
     }
 }
@@ -308,7 +473,7 @@ fn rand_alphanumerecimal_hash() -> String {
             loop {
                 let rem = carry % BASE;
                 if rem < 10 { hash_str.push_str(&format!("{}", rem)) }
-                // 'a' == 97 as char
+                // `'a' == 97 as char`
                 else { hash_str.push(char::from_u32(rem + 87).unwrap()) }
 
                 if carry == rem {
@@ -348,43 +513,85 @@ fn rand_alphanumerecimal_hash() -> String {
 
 #[component]
 pub fn PageNodes(cx: Scope,
+    page_data: RwSignal<Page>,
     nodes: RwSignal<Vec<PageNode>>,
     location: Vec<usize>,
-    hashes: RwSignal<HashMap<String, Vec<usize>>>
 ) -> impl IntoView {
     let mut elems: Vec<HtmlElement<AnyElement>> = Vec::new();
 
-    for (i, node) in nodes.get().iter().enumerate() {
+    console_log(&format!("{:?}", page_data.get().locations.get()));
+
+    // create_effect(cx, )
+
+    // need to start rending at the starting node
+    let start_idx = match page_data.get().top_elem.get().hash.as_str() {
+        "" => 0,
+        top_hash => {
+            let nest_lvl = location.len();
+            page_data.get().locations.get().get(top_hash).unwrap()[nest_lvl]
+        },
+    };
+
+    let iter_nodes = nodes.get();
+    let mut iter = iter_nodes.iter();
+    iter.advance_by(start_idx).unwrap();
+    for (i, node) in iter.enumerate() {
         let mut location = location.clone();
         location.push(i);
+
+        let mut node_hash = node.hash.clone();
+
+        // create & add hash/location if not present
+        if node_hash == "".to_string() {
+            let locations = page_data.get().locations;
+            let mut hash = rand_alphanumerecimal_hash();
+            loop {
+                if !locations.get().contains_key(&hash) { break }
+                hash = rand_alphanumerecimal_hash();
+            }
+            locations.update(|h| {
+                h.insert(hash.clone(), location.clone());
+            });
+            nodes.update(|v| { v[i].hash = hash.clone() });
+            // need to also update local hash var bc it was taken from node which uses an old read
+            node_hash = hash;
+        }
+
         let elem = match node.contents {
             PageNodeContents::Children(nodes) => {
                 match node.kind {
                     PageNodeType::H1 => view! {cx,
-                        <div contenteditable
-                        type=PageNodeType::H1.value()>
-                            <PageNodes nodes location hashes />
+                        <div //contenteditable
+                        type=PageNodeType::H1.value()
+                        hash=node_hash>
+                            <PageNodes page_data nodes location />
                         </div>
                     },
                     PageNodeType::TextBlock => view! {cx,
-                        <div type=PageNodeType::TextBlock.value()>
-                            <PageNodes nodes location hashes />
+                        <div
+                        type=PageNodeType::TextBlock.value()
+                        hash=&node.hash>
+                            <PageNodes page_data nodes location />
                         </div>
                     },
                     _ => view! {cx,
-                        <div>"‼️ block missing"</div>
+                        <div hash=node_hash>"‼️ block missing"</div>
                     },
                 }.into_any()
             }
             PageNodeContents::Content(content) => {
                 match node.kind {
                     PageNodeType::RawText => view! {cx,
-                        <span type=PageNodeType::RawText.value()>
+                        <span
+                        type=PageNodeType::RawText.value()
+                        hash=node_hash>
                             {content.get().get("text").unwrap()}
                         </span>
                     },
                     _ => view! {cx,
-                        <span type=PageNodeType::RawText.value()>
+                        <span
+                        type=PageNodeType::RawText.value()
+                        hash=node_hash>
                             "‼️ only raw text allowed"
                         </span>
                     },
@@ -394,6 +601,21 @@ pub fn PageNodes(cx: Scope,
         elems.push(elem);
     }
     elems
+
+    // TODO: COMMIT, THEN TEST CONVERSION TO <FOR />. IF THE UPDATING FROM 
+    // SCROLLING IS NOT REACTIVE, REVERT MOST CHANGES AND DO MANUAL DOM 
+    // UPDATES IN SCROLL HANDLER
+
+    // TODO: COMMIT CHANGES, THE DECIDE ON EITHER PLACING ABOVE CODE IN THE 
+    // view!{} so it executes on every update, OR, leave this function as an 
+    // init component, and update the DOM directly in the scroll-handler
+
+    // view! {cx,
+    //     {
+    //         let vec = vec![1, 2, 3, 4];
+    //         elems
+    //     }
+    // }
 }
 
 // #[component]

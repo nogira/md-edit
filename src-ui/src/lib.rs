@@ -55,7 +55,7 @@
 // }
 
 // #[component]
-// pub fn SimpleCounter(cx: Scope, name: String) -> Element {
+// pub fn SimpleCounter(cx: Scope, name: String) -> impl IntoView {
 //     let (value, set_value) = create_signal(cx, 0);
 
 //     // Greet event, will clean-up once event is received.
@@ -99,14 +99,15 @@
 //             }>"Emit generic event"</button>
 
 //             <ul>
-//                 <For each=event_vec key=|e| e.num>
-//                     {|cx: Scope, e: &GenericEventRes| {
-//                         view! {
-//                             cx,
+//                 <For each=event_vec key=|e| e.num view=move |e: GenericEventRes| {
+//                     if e.num > 2 {
+//                         Some(view! { cx,
 //                             <li>{e.message.clone()}</li>
-//                         }
-//                     }}
-//                 </For>
+//                         })
+//                     } else {
+//                         None
+//                     }
+//                 } />
 //             </ul>
 //         </div>
 //     }
