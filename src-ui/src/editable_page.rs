@@ -305,7 +305,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // handler
         // FIXME: WOOOOOOOOOOOOOOOOW THIS IS JANKY. back to the drawing board? render whole page at once?
         let now = Date::now();
-        if now > scroll_throttle.get() + 50.0 {
+        if now > scroll_throttle.get() + 200.0 {
             scroll_throttle.set(now);
         } else {
             return;
@@ -314,59 +314,6 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // TODO: ONCE GET NEXT/PREV ELEM, QUERY ITS EDGE POSITION AND IF STILL 
         // REQUIRES ANOTHER NEXT/PREV ELEM, KEEP GETTING THEM UNTIL WE ARE IN 
         // RANGE !!!!!!!, AND ONLY THEN UPDATE THE TOP/BOT ELEM
-
-        console_log("scroll");
-        let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
-        // let scroll_top = page_elem.scroll_top();
-        // console_log(&format!("SCROLL TOP: {:?}", scroll_top));
-        let page_top_edge = page_elem.get_bounding_client_rect().top();
-        let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
-
-        let top_elem = page_data.get().top_elem;
-        let bot_elem = page_data.get().bot_elem;
-
-        const REMOVE_DISTANCE: f64 = 50.0;
-        const ADD_DISTANCE: f64 = 10.0;
-
-        let top_elem_hash = top_elem.get().hash;
-        let top_element = query_dom_page_node(&top_elem_hash);
-        let top_elem_bot_edge = top_element.get_bounding_client_rect().bottom();
-        let px_above_top = page_top_edge - top_elem_bot_edge;
-        // if bot edge of top_elem is less than page_top_edge, we need to 
-        // render the element above it
-        if px_above_top < ADD_DISTANCE {
-            console_log("RENDER ONE ABOVE !!!");
-            // loop
-            if let Some(prev_elem_hash) = get_hash_of_prev_elem(&top_elem_hash, page_data) {
-                let height = get_node_from_hash(&prev_elem_hash, page_data)
-                    .unwrap().get().height;
-                // update top_elem to trigger re-render
-                top_elem.update(|e| {
-                    e.hash = prev_elem_hash;
-                    // rm previously added padding
-                    let total = e.pad as f64 - height as f64;
-                    e.pad = total as u32; // if total is negative it is converted to 0
-                });
-            };
-        // if bot edge of top_elem is greater than page_top_edge by 50px, we 
-        // need to remove the element
-        } else if px_above_top > REMOVE_DISTANCE {
-            console_log("REMOVE TOP");
-            // update height of node
-            let height = top_element.get_bounding_client_rect().height();
-            // console_log(&format!("HEIGHT ADDED: {:?}", height));
-            let top_node = get_node_from_hash(&top_elem_hash, page_data).unwrap();
-            top_node.update(|n| n.height = height as u32);
-
-            if let Some(next_elem_hash) = get_hash_of_next_elem(&top_elem_hash, page_data) {
-                // update top_elem to trigger re-render
-                top_elem.update(|e| {
-                    e.hash = next_elem_hash.clone();
-                    let total = e.pad as f64 + height;
-                    e.pad = total as u32;
-                });
-            };
-        }
 
         // FIXME: I JUST REALIZED THIS WAY OF RENDERING MIGHT FUCK UP IF I 
         // SCROLL TOO FAST, OR MORE IMPORTANTLY IF I CLICK A SUBHEADING IN THE 
@@ -394,28 +341,128 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // INSTEAD OF USING MANY DOM CALLS ?? I MIGHT NEED TO SIMPLY FIND A WAY 
         // TO SYNC THE PADDING DIV UPDATE WITH THE PAGE NODES UPDATE
 
-        // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
+        console_log("scroll");
+        let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
+        // let scroll_top = page_elem.scroll_top();
+        // console_log(&format!("SCROLL TOP: {:?}", scroll_top));
+        let page_top_edge = page_elem.get_bounding_client_rect().top();
+        let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
 
-        let bot_elem_hash = bot_elem.get().hash;
-        let bot_element = query_dom_page_node(&bot_elem_hash);
-        let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
-        let px_below_bot = bot_elem_top_edge - page_bot_edge;
-        // if top edge of bot_elem is less than page_bot_edge, we need to 
-        // render the element below it
-        if px_below_bot < ADD_DISTANCE {
-            // console_log("RENDER ONE BELOW");
-            if let Some(next_elem_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
-                // update bot_elem to trigger re-render
-                bot_elem.update(|e| e.hash = next_elem_hash);
-            };
-        // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
-        // need to remove the element
-        } else if px_below_bot > REMOVE_DISTANCE {
-            // console_log("REMOVE BOT");
-            if let Some(prev_elem_hash) = get_hash_of_prev_elem(&bot_elem_hash, page_data) {
-                // update bot_elem to trigger re-render
-                bot_elem.update(|e| e.hash = prev_elem_hash);
-            };
+        let top_elem = page_data.get().top_elem;
+        let bot_elem = page_data.get().bot_elem;
+
+        const REMOVE_DISTANCE: f64 = 50.0;
+        const ADD_DISTANCE: f64 = 20.0;
+
+        let mut top_done = false;
+        let mut bot_done = false;
+
+        let mut new_top_hash = top_elem.get().hash;
+        let mut new_bot_hash = bot_elem.get().hash;
+        let mut new_top_pad = top_elem.get().pad;
+        let mut new_bot_pad = bot_elem.get().pad;
+
+        // I'M LOOPING THE ENTIRE TOP AND BOTTOM INSTEAD OF MINILOOPS IN EACH 
+        // IF/ELSE-IF SO IF E.G. I SKIP RIGHT TO THE BOTTOM OF THE PAGE, SINCE 
+        // THE TOP IS CALLED FIRST, DERENDING ALL THE TOP NODES, IT WOULD 
+        // EVENTUALLY CRASH (?) BC THE TOP_ELEM WOULD GET BELOW THE BOT_ELEM
+
+        // FIXME: 🚨🚨🚨 OOPS THIS DOESN'T WORK BC THE LOGIC REQUIRES THE ADDED NODES TO HAVE RENDERED TO BE ABLE TO GET THEIR HEIGHT
+
+        // I THINK I SWAP TO CUSTOM REACTIVITY INSTEAD OF LEPTOS REACTVITY BC 
+        // LIKELY MUCH LESS COMPUTATION, AND EASIER, AND BETTER
+        // NOTE: SINCE WASM DOESN'T HAVE ACCESS TO DOM YET, TRY TO LIMIT DOM CALLS
+        // E.G. IF DELETING ALL THE CHILDREN NODES IN Vec::from([1]), just 
+        // delete the root node. also, MAY EVEN STEAL LEPTOS IDEA AND RENDER 
+        // ALL NEW NODES ADDED TO A STRING, THEN CONVERT TO. OH WAIT, IF RENDER 
+        // ALL AT ONCE I CAN'T RLY GET HEIGHT OF EACH ELEM EASILY
+
+        while !top_done || !bot_done {
+            let top_element = query_dom_page_node(&new_top_hash);
+            let top_elem_bot_edge = top_element.get_bounding_client_rect().bottom();
+            console_log(&format!("page_top_edge: {:?}", page_top_edge));
+            console_log(&format!("top_elem_bot_edge: {:?}", top_elem_bot_edge));
+            
+            let px_above_top = top_elem_bot_edge - page_top_edge;
+            console_log(&format!("px_above_top: {:?}", px_above_top));
+            // if px_above_top is less than ADD_DISTANCE, we need to 
+            // render the element above it
+            if px_above_top < ADD_DISTANCE {
+                // console_log("RENDER ONE ABOVE !!!");
+                if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_top_hash, page_data) {
+                    let height = get_node_from_hash(&prev_elem_hash, page_data)
+                        .unwrap().get().height;
+                    // rm previously added padding
+                    // if total is negative it is converted to 0 w/ `as u32`
+                    new_top_pad = (new_top_pad as f64 - height as f64) as u32;
+                    new_top_hash = prev_elem_hash;
+                } else {
+                    // if already first, we are done
+                    top_done = true;
+                }
+            // if bot edge of top_elem is greater than page_top_edge by 50px, we 
+            // need to remove the element
+            } else if px_above_top > REMOVE_DISTANCE {
+                // console_log("REMOVE TOP");
+                // update height of node
+                let height = top_element.get_bounding_client_rect().height();
+                // console_log(&format!("HEIGHT ADDED: {:?}", height));
+                console_log(&format!("HASH: {:?}", new_top_hash));
+                let top_node = get_node_from_hash(&new_top_hash, page_data).unwrap();
+                top_node.update(|n| n.height = height as u32);
+    
+                if let Some(next_elem_hash) = get_hash_of_next_elem(&new_top_hash, page_data) {
+                    new_top_pad = (new_top_pad as f64 + height) as u32;
+                    new_top_hash = next_elem_hash;
+                } else {
+                    // if already last, we are done
+                    top_done = true;
+                }
+            } else {
+                top_done = true;
+            }
+    
+            // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
+    
+            let bot_element = query_dom_page_node(&new_bot_hash);
+            let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
+            let px_below_bot = page_bot_edge - bot_elem_top_edge;
+            // if top edge of bot_elem is less than page_bot_edge, we need to 
+            // render the element below it
+            if px_below_bot < ADD_DISTANCE {
+                console_log("RENDER ONE BELOW");
+                if let Some(next_elem_hash) = get_hash_of_next_elem(&new_bot_hash, page_data) {
+                    new_bot_hash = next_elem_hash;
+                } else {
+                    // if already last, we are done
+                    bot_done = true;
+                }
+            // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
+            // need to remove the element
+            } else if px_below_bot > REMOVE_DISTANCE {
+                console_log("REMOVE BOT");
+                if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_bot_hash, page_data) {
+                    new_bot_hash = prev_elem_hash;
+                } else {
+                    // if already first, we are done
+                    bot_done = true;
+                }
+            } else {
+                bot_done = true;
+            }
+        }
+        // update top/bot elems to trigger re-render
+        if new_top_hash != top_elem.get().hash {
+            top_elem.update(|e| e.hash = new_top_hash)
+        }
+        if new_top_pad != top_elem.get().pad {
+            top_elem.update(|e| e.pad = new_top_pad)
+        }
+        if new_bot_hash != bot_elem.get().hash {
+            bot_elem.update(|e| e.hash = new_bot_hash)
+        }
+        if new_bot_pad != bot_elem.get().pad {
+            bot_elem.update(|e| e.pad = new_bot_pad)
         }
     };
 
@@ -447,10 +494,17 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // on:keydown=handle_keypress
         _ref=elem_ref
         >
-            <div contenteditable="false" style=move ||{ format!("height: {}px", page_data.get().top_elem.get().pad)} />
+            <div contenteditable="false" style=move || {
+                format!("height: {}px", page_data.get().top_elem.get().pad)
+            } />
             <PageNodes
             page_data=page_data
             nodes=nodes_in_view />
+            <div contenteditable="false" style="height: 50px" />
+                // } />
+            // <div contenteditable="false" style=move || {
+            //     format!("height: {}px", page_data.get().bot_elem.get().pad)
+            // } />
         </div>
     }
 }

@@ -1,4 +1,4 @@
-use leptos::{Scope, RwSignal, create_rw_signal, console_log};
+use leptos::{Scope, RwSignal, create_rw_signal, console_log, document};
 use super::{Page, PageNode, PageNodeContents};
 
 pub fn get_top_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
@@ -165,7 +165,17 @@ pub fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
         // jump one level down
         location.pop().unwrap();
         // if this is true, the input hash is already the last element
-        if location.len() == 0 { console_log("ALREADY LAST"); return None }
+        if location.len() == 0 {
+            console_log("ALREADY LAST");
+
+            // FIXME: eventually i want to get rid of this and calculate height based on `.height` vals in nodes data structure
+            // get height of doc for bottom padding purposes 
+            let page = document().query_selector("[type=page]").unwrap().unwrap();
+            let height = page.get_bounding_client_rect().height() as u32;
+            page_data.get().bot_elem.update(|e| e.pad = height);
+            
+            return None;
+        }
     }
 }
 
@@ -208,9 +218,6 @@ pub fn get_hash_of_prev_elem(hash: &String, page_data: RwSignal<Page>
     }
 }
 
-// FIXME: LMAO almost a duplicate of function above. should rly delete above 
-// and do `get_node_from_location().get().hash`. or AT LEAST convert to wrapper 
-// function around this one
 fn get_node_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
 ) -> Option<RwSignal<PageNode>> {
     let mut node = match nodes.get(location[0]) {
