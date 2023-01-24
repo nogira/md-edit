@@ -67,22 +67,42 @@ pub fn Main(cx: Scope) -> impl IntoView {
 
     update_displayed(0);
 
+    let elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
+
+    // create_effect(cx, move |_| {
+    //     if let Some(elem) = elem_ref.get() {
+    //         request_animation_frame(move || {
+    //             console_log(&format!("{:?}", elem.get_bounding_client_rect().height()));
+    //             let node = document().create_element("span").unwrap();
+    //             node.set_inner_html("hello<br>hi<br>hi");
+    //             console_log(&format!("{:?}", node.get_bounding_client_rect().height()));
+    //             elem.append_child(&node).unwrap();
+    //             console_log(&format!("{:?}", node.get_bounding_client_rect().height()));
+    //             console_log(&format!("{:?}", elem.get_bounding_client_rect().height()));
+    //         })
+    //     }
+    // });
+
     view! {cx,
+        
         <div>
             " start idx: "<span>{move || start_idx.get()}</span>
             <button on:click=dec>"-"</button>
             <button on:click=inc>"+"</button>
         </div>
         <br />
-        <For each=current_items key=move|e| e.get().id
-        view=move |e| {
-            console_log(&format!("1. RERENDERING: {}", e.get().id)); // THIS TRIGGERS ON RE-RENDER
-            view! {cx,
-                {console_log(&format!("2. RERENDERING: {}", e.get().id));} // THIS TRIGGERS ON RE-RENDER
-                <div id=e.get().id>
-                    {e.get().text.clone()}
-                </div>
-            }
-        } />
+        <div _ref=elem_ref style="overflow-y: auto; height: 50px;">
+            <div style=move || { format!("height: {}px", start_idx.get() * 18) }/>
+            <For each=current_items key=move|e| e.get().id
+            view=move |e| {
+                console_log(&format!("1. RERENDERING: {}", e.get().id)); // THIS TRIGGERS ON RE-RENDER
+                view! {cx,
+                    {console_log(&format!("2. RERENDERING: {}", e.get().id));} // THIS TRIGGERS ON RE-RENDER
+                    <div id=e.get().id>
+                        {e.get().text.clone()}
+                    </div>
+                }
+            } />
+        </div>
     }
 }

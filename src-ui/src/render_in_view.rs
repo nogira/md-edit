@@ -45,7 +45,7 @@ fn get_bot_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
     bot_hash
 }
 
-fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>, 
+pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>, 
     top_loc: &Vec<usize>, bot_loc: &Vec<usize>,
 ) -> Vec<RwSignal<PageNode>> {
     let mut vec = Vec::new();
@@ -135,20 +135,6 @@ fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
     }
     vec
 }
-pub fn update_nodes_in_view(cx: Scope, page_data: RwSignal<Page>) {
-    let locations = page_data.get().locations.get();
-    let top_elem = locations.get(
-        &page_data.get().top_elem.get().hash
-    ).unwrap();
-    let bot_elem = locations.get(
-        &page_data.get().bot_elem.get().hash
-    ).unwrap();
-    // console_log(&format!("LOCATIONS: {:?}", locations));
-    // console_log(&format!("TOP ELEM: {:?}", top_elem));
-    page_data.get().nodes_in_view.set(get_nodes_in_view(
-        cx, page_data.get().nodes.get(), top_elem, bot_elem
-    ));
-}
 
 pub fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
 ) -> Option<String> {
@@ -221,27 +207,7 @@ pub fn get_hash_of_prev_elem(hash: &String, page_data: RwSignal<Page>
         if location.len() == 0 { console_log("ALREADY FIRST"); return None }
     }
 }
-fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
-) -> Option<String> {
-    let mut node = match nodes.get(location[0]) {
-        Some(node) => node.clone(),
-        None => return None,
-    };
-    for idx in &location[1..] {
-        match node.get().contents {
-            PageNodeContents::Children(children) => {
-                match children.get().get(*idx) {
-                    Some(child) => {
-                        node = child.clone();
-                    },
-                    None => return None,
-                }
-            },
-            _ => { panic!("should never get here") },
-        }
-    }
-    Some(node.get().hash)
-}
+
 // FIXME: LMAO almost a duplicate of function above. should rly delete above 
 // and do `get_node_from_location().get().hash`. or AT LEAST convert to wrapper 
 // function around this one
@@ -265,6 +231,14 @@ fn get_node_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
         }
     }
     Some(node)
+}
+
+fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
+) -> Option<String> {
+    match get_node_from_location(location, nodes) {
+        Some(node) => Some(node.get().hash),
+        None => None,
+    }
 }
 
 pub fn get_node_from_hash(hash: &String, page_data: RwSignal<Page>

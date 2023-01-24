@@ -7,7 +7,7 @@ use web_sys::HtmlDivElement;
 // use src_ui::*;
 use super::{
     Page, PageNode, PageNodeType, PageNodeContents, EdgeElem, add_hashes,
-    get_top_hash, update_nodes_in_view, get_hash_of_next_elem, get_hash_of_prev_elem,
+    get_top_hash, get_nodes_in_view, get_hash_of_next_elem, get_hash_of_prev_elem,
     get_node_from_hash, 
 };
 
@@ -124,10 +124,13 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     page_data.get().top_elem.update(|e| e.hash = top_hash.clone());
     page_data.get().bot_elem.update(|e| e.hash = top_hash);
     // ==init nodes_in_view==
-    update_nodes_in_view(cx, page_data);
+    // update_nodes_in_view(cx, page_data);
 
-
-    // console_log(&format!("NUM NODES IN VIEW: {:?}", page_data.get().nodes_in_view.get().len()));
+    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&10_i32))); // 4 bytes
+    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data))); // 20
+    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get()))); // 100
+    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes))); // 20
+    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes.get()))); // 12
 
     // let handle_keypress = move |event: web_sys::KeyboardEvent| {
 
@@ -265,7 +268,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                         // update bot_elem hash
                         page_data.get().bot_elem.update(|e| e.hash = next_hash);
                         // update nodes_in_view to trigger re-render
-                        update_nodes_in_view(cx, page_data);
+                        // update_nodes_in_view(cx, page_data);
                         // trigger refresh of this closure so bot_elem can 
                         // change again if this is not the bottom element
                         init_render_toggle.set(!refresh_toggle);
@@ -294,7 +297,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // TODO: ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
 
-    let scroll_throttle = create_rw_signal(cx, 0.0);
+    let scroll_throttle = store_value(cx, 0.0);
     let handle_scroll = move |event: web_sys::Event| {
         // this is firing WAAAAAAAAY too quickly. so much so that if an element 
         // from the top if removed, ALL elements immediately get removed before 
@@ -302,12 +305,15 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // handler
         // FIXME: WOOOOOOOOOOOOOOOOW THIS IS JANKY. back to the drawing board? render whole page at once?
         let now = Date::now();
-        if now > scroll_throttle.get() + 300.0 {
-            console_log("YES");
+        if now > scroll_throttle.get() + 50.0 {
             scroll_throttle.set(now);
         } else {
             return;
         }
+
+        // TODO: ONCE GET NEXT/PREV ELEM, QUERY ITS EDGE POSITION AND IF STILL 
+        // REQUIRES ANOTHER NEXT/PREV ELEM, KEEP GETTING THEM UNTIL WE ARE IN 
+        // RANGE !!!!!!!, AND ONLY THEN UPDATE THE TOP/BOT ELEM
 
         console_log("scroll");
         let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
@@ -316,55 +322,49 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         let page_top_edge = page_elem.get_bounding_client_rect().top();
         let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
 
-        let top_elem = page_data.get().top_elem.get();
-        let bot_elem = page_data.get().bot_elem.get();
+        let top_elem = page_data.get().top_elem;
+        let bot_elem = page_data.get().bot_elem;
 
-        const REMOVE_DISTANCE: f64 = 100.0;
+        const REMOVE_DISTANCE: f64 = 50.0;
         const ADD_DISTANCE: f64 = 10.0;
 
-        let mut update_nodes = false;
-
-        let top_elem_hash = top_elem.hash;
+        let top_elem_hash = top_elem.get().hash;
         let top_element = query_dom_page_node(&top_elem_hash);
-        let top_elem_bot_edge = top_element.get_bounding_client_rect().top();
-        // console_log(&format!("BOT of top_elem: {:?}", top_elem_bot_edge));
+        let top_elem_bot_edge = top_element.get_bounding_client_rect().bottom();
+        let px_above_top = page_top_edge - top_elem_bot_edge;
         // if bot edge of top_elem is less than page_top_edge, we need to 
         // render the element above it
-        if top_elem_bot_edge > page_top_edge - ADD_DISTANCE {
+        if px_above_top < ADD_DISTANCE {
             console_log("RENDER ONE ABOVE !!!");
+            // loop
             if let Some(prev_elem_hash) = get_hash_of_prev_elem(&top_elem_hash, page_data) {
-                // update top_elem hash and pad
                 let height = get_node_from_hash(&prev_elem_hash, page_data)
                     .unwrap().get().height;
-                page_data.get().top_elem.update(|e| {
+                // update top_elem to trigger re-render
+                top_elem.update(|e| {
                     e.hash = prev_elem_hash;
                     // rm previously added padding
                     let total = e.pad as f64 - height as f64;
                     e.pad = total as u32; // if total is negative it is converted to 0
                 });
-                // update nodes_in_view to trigger re-render
-                update_nodes = true;
             };
         // if bot edge of top_elem is greater than page_top_edge by 50px, we 
         // need to remove the element
-        } else if top_elem_bot_edge < page_top_edge - REMOVE_DISTANCE {
+        } else if px_above_top > REMOVE_DISTANCE {
             console_log("REMOVE TOP");
             // update height of node
             let height = top_element.get_bounding_client_rect().height();
-            console_log(&format!("HEIGHT ADDED: {:?}", height));
+            // console_log(&format!("HEIGHT ADDED: {:?}", height));
             let top_node = get_node_from_hash(&top_elem_hash, page_data).unwrap();
             top_node.update(|n| n.height = height as u32);
 
             if let Some(next_elem_hash) = get_hash_of_next_elem(&top_elem_hash, page_data) {
-                console_log(&format!("NEXT ELEM HASH: {:?}", next_elem_hash));
-                // update top_elem hash and pad
-                page_data.get().top_elem.update(|e| {
+                // update top_elem to trigger re-render
+                top_elem.update(|e| {
                     e.hash = next_elem_hash.clone();
                     let total = e.pad as f64 + height;
                     e.pad = total as u32;
                 });
-                // update nodes_in_view to trigger re-render
-                update_nodes = true;
             };
         }
 
@@ -377,38 +377,45 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // TODO: 🚨🚨🚨🚨🚨 hmm actually, what if the editable page element is simply a 
         // <div id="knfkd" />, and i give it a f-tonne of callbacks and such 
         // (avoiding leptos rendering) 🚨🚨🚨🚨🚨
+        // MIGHT EVEN BE THE WHOLE "ONLY RENDER NEXT ELEM" THING THAT'S FUCKING 
+        // EVERYTHING UP
+        // TODO: on the other hand, maybe i'm just computing WAAAAAAAAAY too much 
+        // shit (again with the recomputation every single next element). 
+        // perhaps only update base blocks ??????? also check to see where i'm 
+        // going overkill on the code
+        // TODO: REFERENCING DATA STRUCTURE MAY SPEED THINGS UP A LOOOOOOOOOOOOT
+        // TODO: PROBABLY ALSO DOESN'T HELP THAT BY USING <FOR>, THE WHOLE DATA 
+        // STRUCTURE NEEDS TO BE RELOADED AND REPROCESSED WITH EVERY NEW RENDER. 
+        // NOT TO MENTION ALL THE COPIES FOR ALL THE .GET() CALLS !!! ALL BC OF 
+        // THE <FOR>. GO CUSTOM
+        // TODO: I CAN USE NODEREF FOR DIRECT DOM MANIPULATION. COMPLETELY 
+        // BYPASSING LEPTOS !!!!!!!!!!!!!!!
+        // TODO: THEN AGAIN, ISNT LEPTOS FASTET BC IT SENDS HTML STRINGS 
+        // INSTEAD OF USING MANY DOM CALLS ?? I MIGHT NEED TO SIMPLY FIND A WAY 
+        // TO SYNC THE PADDING DIV UPDATE WITH THE PAGE NODES UPDATE
 
         // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
 
-        let bot_elem_hash = bot_elem.hash;
+        let bot_elem_hash = bot_elem.get().hash;
         let bot_element = query_dom_page_node(&bot_elem_hash);
         let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
-        // console_log(&format!("TOP of bot_elem: {:?}", bot_elem_top_edge));
+        let px_below_bot = bot_elem_top_edge - page_bot_edge;
         // if top edge of bot_elem is less than page_bot_edge, we need to 
         // render the element below it
-        if bot_elem_top_edge < page_bot_edge + ADD_DISTANCE {
+        if px_below_bot < ADD_DISTANCE {
             // console_log("RENDER ONE BELOW");
             if let Some(next_elem_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
-                // update bot_elem hash
-                page_data.get().bot_elem.update(|e| e.hash = next_elem_hash);
-                // update nodes_in_view to trigger re-render
-                update_nodes = true;
+                // update bot_elem to trigger re-render
+                bot_elem.update(|e| e.hash = next_elem_hash);
             };
         // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
         // need to remove the element
-        } else if bot_elem_top_edge > page_bot_edge + REMOVE_DISTANCE {
+        } else if px_below_bot > REMOVE_DISTANCE {
             // console_log("REMOVE BOT");
             if let Some(prev_elem_hash) = get_hash_of_prev_elem(&bot_elem_hash, page_data) {
-                // update bot_elem hash
-                page_data.get().bot_elem.update(|e| e.hash = prev_elem_hash);
-                // update nodes_in_view to trigger re-render
-                update_nodes = true;
+                // update bot_elem to trigger re-render
+                bot_elem.update(|e| e.hash = prev_elem_hash);
             };
-        }
-        // only call update_nodes_in_view once to speed things up
-        if update_nodes {
-            // update nodes_in_view to trigger re-render
-            update_nodes_in_view(cx, page_data);
         }
     };
 
@@ -420,6 +427,18 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // prob better to alter `padding` of top root elem instead of `top` (bc i dont think `top`/`bottom` would work)
 
+    let nodes_in_view = create_rw_signal(cx, Vec::new());
+
+    create_effect(cx, move |_| {
+        let locations = page_data.get().locations.get();
+        let top_elem = locations.get(
+            &page_data.get().top_elem.get().hash).unwrap();
+        let bot_elem = locations.get(
+            &page_data.get().bot_elem.get().hash).unwrap();
+        let new = get_nodes_in_view(cx, page_data.get().nodes.get(), top_elem, bot_elem);
+        nodes_in_view.set(new);
+    });
+
     view! {cx,
         <div contenteditable
         style="overflow-y: auto; height:150px;"
@@ -428,10 +447,10 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // on:keydown=handle_keypress
         _ref=elem_ref
         >
-            <div contenteditable="false" style=move ||{ format!("height: {}", page_data.get().top_elem.get().pad)} />
+            <div contenteditable="false" style=move ||{ format!("height: {}px", page_data.get().top_elem.get().pad)} />
             <PageNodes
             page_data=page_data
-            nodes=page_data.get().nodes_in_view />
+            nodes=nodes_in_view />
         </div>
     }
 }
