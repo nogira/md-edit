@@ -14,7 +14,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
     const ADD_DISTANCE: f64 = 20.0;
 
     let mut top_done = false;
-    let mut bot_done = true;
+    let mut bot_done = false;
 
     let mut new_top_node = top_elem_data.get().node_sig;
     let mut new_bot_node = bot_elem_data.get().node_sig;
@@ -58,12 +58,12 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
         let px_top_above_top = page_top_edge - top_elem_top_edge;
         let px_bot_above_top = page_top_edge - top_elem_bot_edge;
         // ==RENDER THE ELEMENT ABOVE IT==
-        if true && px_top_above_top < ADD_DISTANCE {
+        if px_top_above_top < ADD_DISTANCE {
             // NOTE: THIS TRIGGERS AT TOP OF PAGE BC TOP NODE IS STILL UNDER 
             // THE TOP OF PAGE (but obv not the if statement below)
             if let Some(prev_node) = get_prev_block_node(&new_top_node.get().hash, page_data) {
                 // add node to page
-                let height = insert_new_node_before(cx, &page_elem, prev_node);
+                let height = insert_new_node_before(cx, prev_node);
                 // rm previously added padding
                 // if total is negative (should never be) it is converted to 0 w/ `as u32`
                 new_top_pad = (new_top_pad as f64 - height as f64) as u32;
@@ -105,7 +105,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
         if px_bot_below_bot < ADD_DISTANCE {
             if let Some(next_node) = get_next_block_node(&new_bot_node.get().hash, page_data) {
                 // add node to page
-                let height = insert_new_node_after(cx, &page_elem, next_node);
+                let height = insert_new_node_after(cx, next_node);
                 // rm previously added padding
                 // if total is negative (should never be) it is converted to 0 w/ `as u32`
                 new_bot_pad = (new_bot_pad as f64 - height as f64) as u32;
@@ -152,8 +152,9 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
     }
 }
 
-fn insert_new_node_before(cx: Scope, page_elem: &Element,
-new_node: RwSignal<PageNode>) -> u32 {
+// TODO: tbh it might be better to create a new implementation of insert that uses a slice of the nodes, as we'll already need something like this for e.g. copy and paste
+
+fn insert_new_node_before(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
     // 1. INSERT THE PREV NODE ALONG WITH ALL ITS PARENTS IF THEY DON'T EXIST
     // 2. ADD DOM_REF TO THE NODE
     // 3. CALCULATE THE HEIGHT ITS USING (INCLUDING ANY PARENT NODES, E.G. 
@@ -171,44 +172,36 @@ new_node: RwSignal<PageNode>) -> u32 {
         child_node.update(|n| {
             n.elem_ref = Some(child_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
         });
-        if let Some(parent_node) = child_node.get().parent {
-            let children = parent_node.get().children;
-            let is_last_child = child_node.get().hash == children.last().unwrap().get().hash;
-            if is_last_child {
-                // if child is last child, it means we have to add the parent node too
-                let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the top instead of only the top element
-                    let mut parent = parent_node.get();
-                    parent.children = Vec::new();
-                    create_elem(create_rw_signal(cx, parent))
-                };
-                castrated_parent_elem.append_child(&child_elem).unwrap();
-                child_elem = castrated_parent_elem;
-                child_node = parent_node;
-            } else {
-                for i in 0..children.len() {
-                    // FIRST CHILD W/ .ELEM_REF = SOME() WILL BE THE child_node 
-                    // ITSELF BC IF ITS THE FIRST child_node WE SET THE 
-                    // .ELEM_REF BEFORE THE LOOP, AND IF IT'S A PARENT, WE SET 
-                    // THE .ELEM_REF WHEN WE CHANGE child_node TO THE PARENT
-                    if children[i].get().elem_ref.is_none() { continue }
-
-                    // get the first rendered (i.e. rendered to DOM) child, 
-                    // and insert new elem before it
-                    let first_rendered_child = children[i+1].get().elem_ref.unwrap();
-                    let parent_elem = parent_node.get().elem_ref.unwrap();
-                    parent_elem.insert_before(&child_elem, 
-                        Some(&first_rendered_child)).unwrap();
-                    return child_elem.get_bounding_client_rect().height() as u32;
-                }
-                panic!("this should not happen !!");
-            }
+        let parent_node = child_node.get().parent.unwrap();
+        let children = parent_node.get().children;
+        let is_last_child = child_node.get().hash == children.last().unwrap().get().hash;
+        if is_last_child {
+            // if child is last child, it means we have to add the parent node too
+            let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the top instead of only the top element
+                let mut parent = parent_node.get();
+                parent.children = Vec::new();
+                create_elem(create_rw_signal(cx, parent))
+            };
+            castrated_parent_elem.append_child(&child_elem).unwrap();
+            child_elem = castrated_parent_elem;
+            child_node = parent_node;
         } else {
-            // if no parent, we add from the page_elem
-            let elem_to_add_before = page_elem.first_element_child().unwrap()
-                .next_element_sibling().unwrap();
-            page_elem.insert_before(&child_elem, 
-                Some(&elem_to_add_before)).unwrap();
-            return child_elem.get_bounding_client_rect().height() as u32;
+            for i in 0..children.len() {
+                // FIRST CHILD W/ .ELEM_REF = SOME() WILL BE THE child_node 
+                // ITSELF BC IF ITS THE FIRST child_node WE SET THE 
+                // .ELEM_REF BEFORE THE LOOP, AND IF IT'S A PARENT, WE SET 
+                // THE .ELEM_REF WHEN WE CHANGE child_node TO THE PARENT
+                if children[i].get().elem_ref.is_none() { continue }
+
+                // get the first rendered (i.e. rendered to DOM) child, 
+                // and insert new elem before it
+                let first_rendered_child = children[i+1].get().elem_ref.unwrap();
+                let parent_elem = parent_node.get().elem_ref.unwrap();
+                parent_elem.insert_before(&child_elem, 
+                    Some(&first_rendered_child)).unwrap();
+                return child_elem.get_bounding_client_rect().height() as u32;
+            }
+            panic!("this should not happen !!");
         }
     }
 }
@@ -249,8 +242,7 @@ fn remove_top_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
     total_height
 }
 
-fn insert_new_node_after(cx: Scope, page_elem: &Element,
-new_node: RwSignal<PageNode>) -> u32 {
+fn insert_new_node_after(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
     // 1. INSERT THE NEXT NODE ALONG WITH ALL ITS PARENTS IF THEY DON'T EXIST
     // 2. ADD DOM_REF TO THE NODE
     // 3. CALCULATE THE HEIGHT ITS USING (INCLUDING ANY PARENT NODES, E.G. 
@@ -268,31 +260,23 @@ new_node: RwSignal<PageNode>) -> u32 {
         child_node.update(|n| {
             n.elem_ref = Some(child_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
         });
-        if let Some(parent_node) = child_node.get().parent {
-            let children = parent_node.get().children;
-            let is_first_child = child_node.get().hash == children[0].get().hash;
-            if is_first_child {
-                // if child is first child, it means we have to add the parent node too
-                let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the bot instead of only the bot element
-                    let mut parent = parent_node.get();
-                    parent.children = Vec::new();
-                    create_elem(create_rw_signal(cx, parent))
-                };
-                castrated_parent_elem.append_child(&child_elem).unwrap();
-                child_elem = castrated_parent_elem;
-                child_node = parent_node;
-            } else {
-                // can just append to the parent
-                let parent_elem = parent_node.get().elem_ref.unwrap();
-                parent_elem.append_child(&child_elem).unwrap();
-                return child_elem.get_bounding_client_rect().height() as u32;
-            }
+        let parent_node = child_node.get().parent.unwrap();
+        let children = parent_node.get().children;
+        let is_first_child = child_node.get().hash == children[0].get().hash;
+        if is_first_child {
+            // if child is first child, it means we have to add the parent node too
+            let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the bot instead of only the bot element
+                let mut parent = parent_node.get();
+                parent.children = Vec::new();
+                create_elem(create_rw_signal(cx, parent))
+            };
+            castrated_parent_elem.append_child(&child_elem).unwrap();
+            child_elem = castrated_parent_elem;
+            child_node = parent_node;
         } else {
-            // if no parent, we add from the page_elem
-            let elem_to_add_before = page_elem.last_element_child().unwrap()
-                .previous_element_sibling().unwrap();
-            page_elem.insert_before(&child_elem, 
-                Some(&elem_to_add_before)).unwrap();
+            // can just append to the parent
+            let parent_elem = parent_node.get().elem_ref.unwrap();
+            parent_elem.append_child(&child_elem).unwrap();
             return child_elem.get_bounding_client_rect().height() as u32;
         }
     }
@@ -460,7 +444,7 @@ pub fn get_next_block_node(hash: &String, page_data: RwSignal<Page>
     let mut location = page_data.get().locations.get()
         .get(hash).unwrap().to_owned();
     // console_log(&format!("location: {:?}", location));
-    let nodes = page_data.get().nodes.get();
+    let nodes = page_data.get().nodes.get().children;
     // first check next child (e.g. input location is [0, 2], so check [0, 3])
     // then jump one level down and do same, etc until at base and still no 
     // next elems
@@ -498,7 +482,7 @@ pub fn get_prev_block_node(hash: &String, page_data: RwSignal<Page>
     let mut location = page_data.get().locations.get()
         .get(hash).unwrap().to_owned();
     // console_log(&format!("location: {:?}", location));
-    let nodes = page_data.get().nodes.get();
+    let nodes = page_data.get().nodes.get().children;
     // first check prev child (e.g. input location is [0, 3], so check [0, 2])
     // then jump one level down and do same, etc until at base and still no 
     // prev elems
@@ -553,10 +537,10 @@ fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
     }
 }
 
-pub fn get_node_from_hash(hash: &String, page_data: RwSignal<Page>
-) -> Option<RwSignal<PageNode>> {
-    let locations = page_data.get().locations.get();
-    get_node_from_location(
-        locations.get(hash).unwrap(), 
-        &page_data.get().nodes.get())
-}
+// pub fn get_node_from_hash(hash: &String, page_data: RwSignal<Page>
+// ) -> Option<RwSignal<PageNode>> {
+//     let locations = page_data.get().locations.get();
+//     get_node_from_location(
+//         locations.get(hash).unwrap(), 
+//         &page_data.get().nodes.get())
+// }

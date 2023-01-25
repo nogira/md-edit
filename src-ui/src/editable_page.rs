@@ -105,8 +105,11 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 top_variable_padding.set_attribute("style", "height: 0px").unwrap();
                 page_elem.append_child(&top_variable_padding).unwrap();
 
-                init_page_nodes(&page_elem, page_data.get().nodes.get());
-                get_all_node_heights(page_data.get().nodes.get());
+                // TODO: CHANGE THE INIT TO DELETE NODES FROM DOM RIGHT AFTER 
+                // INIT AND GET HEIGHT SO NOT TOO MANY NODES IN THE PAGE AT 
+                // ONCE THAT WILL LAG TF OUT OF THE APP
+                init_page_nodes(&page_elem, page_data.get().nodes);
+                get_all_node_heights(page_data.get().nodes);
 
                 let bot_fixed_padding = document().create_element("div").unwrap();
                 bot_fixed_padding.set_attribute("contenteditable", "false").unwrap();
@@ -124,16 +127,15 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 // VIEW SO DONT HAVE TO QUERY TO GET THE ELEMENT, AND SINCE 
                 // ITS JUST A REF, BUT IDK IF I EVEN NEED TO ACCESS ELEM ???
 
-                // TODO: UNCOMMENT WHEN FUNCTION IS FINISHED
-                // update_dom_nodes_in_view(cx, page_data, &page_elem);
+                update_dom_nodes_in_view(cx, page_data, &page_elem);
             })
         }
     });
 
     view! {cx,
-        <div contenteditable
+        <div
         style="overflow-y: auto; height: 150px;"
-        type="page"
+        type="scroll-window"
         on:scroll=handle_scroll
         on:keydown=handle_keypress
         _ref=page_elem_ref
@@ -141,64 +143,50 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     }
 }
 
-pub fn get_all_node_heights(nodes: Vec<RwSignal<PageNode>>) {
-    for node_sig in nodes {
-        let node = node_sig.get();
-        if node.kind.is_block() {
-            let height = node.elem_ref.clone().unwrap()
-                .get_bounding_client_rect().height() as u32;
-            node_sig.update(|n| { n.height = height });
-            let children = node.children;
-            get_all_node_heights(children);
-        }
+pub fn get_all_node_heights(node_sig: RwSignal<PageNode>) {
+    let node = node_sig.get();
+    if node.kind.is_block() {
+        let height = node.elem_ref.clone().unwrap()
+            .get_bounding_client_rect().height() as u32;
+        node_sig.update(|n| { n.height = height });
+    }
+    for node_sig in node.children {
+        get_all_node_heights(node_sig);
     }
 }
 
 pub fn init_page_nodes(
     mount_elem: &web_sys::Element,
-    nodes: Vec<RwSignal<PageNode>>,
+    node_sig: RwSignal<PageNode>,
 ) {
     // NOTE: CAN'T GET HEIGHTS W/ THIS FUNCTION BC YOU WOULD ONLY GET THE 
     // HEIGHTS OF THE ITEMS MOUNTED TO THE mount_elem OF THE INITIAL CALL. ALL 
     // THE OTHERS WOULD BE ZERO BC THEY'RE BEING MOUNTED TO ITEMS NOT YET 
     // MOUNTED TO THE DOM
-    for node_sig in nodes {
-        let node = node_sig.get();
-        let children = node.children.clone();
-        if node.kind.is_block() {
-            let elem = match node.kind {
-                PageNodeType::H1 => {
-                    let elem = create_h1_elem(node);
-                    init_page_nodes(&elem, children);
-                    mount_elem.append_child(&elem).unwrap();
-                    elem
-                },
-                PageNodeType::TextBlock => {
-                    let elem = create_text_block_elem(node);
-                    init_page_nodes(&elem, children);
-                    mount_elem.append_child(&elem).unwrap();
-                    elem
-                },
-                _ => {
-                    let elem = create_unknown_block_elem(node);
-                    mount_elem.append_child(&elem).unwrap();
-                    elem
-                },
-            };
-            node_sig.update(|n| { n.elem_ref = Some(elem) });
-            continue;
-        }
-        match node.kind {
-            PageNodeType::RawText => {
-                let elem = create_raw_text_elem(node);
-                mount_elem.append_child(&elem).unwrap();
-            },
-            _ => {
-                let elem = create_unknown_span_elem(node);
-                mount_elem.append_child(&elem).unwrap();
-            },
+    // for node_sig in nodes {
+    let node = node_sig.get();
+    let children = node.children.clone();
+    let elem: Element;
+    if node.kind.is_block() {
+        elem = match node.kind {
+            PageNodeType::Page => create_page_elem(node),
+            PageNodeType::H1 => create_h1_elem(node),
+            PageNodeType::TextBlock => create_text_block_elem(node),
+            _ => create_unknown_block_elem(node),
+        };
+        node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
+
+    } else {
+        elem = match node.kind {
+            PageNodeType::RawText => create_raw_text_elem(node),
+            _ => create_unknown_span_elem(node),
         }
     }
+    // mount children if any
+    for child in children {
+        init_page_nodes(&elem, child);
+    }
+    mount_elem.append_child(&elem).unwrap();
 }
 
 // NOTE: `RwSignal` is required to update the `.elem_ref` properties
@@ -229,6 +217,14 @@ pub fn create_elem(
         let child_elem = create_elem(child);
         elem.append_child(&child_elem).unwrap();
     }
+    elem
+}
+
+fn create_page_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("contenteditable", "").unwrap();
+    elem.set_attribute("type", PageNodeType::Page.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
     elem
 }
 
