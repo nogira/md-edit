@@ -3,12 +3,12 @@ use core::{cmp::max, fmt::Debug};
 use leptos::{*, js_sys::{Math, Date}};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
-use web_sys::HtmlDivElement;
+use web_sys::Element;
+
 // use src_ui::*;
 use super::{
-    Page, PageNode, PageNodeType, PageNodeContents, EdgeElem, add_hashes,
-    get_top_hash, get_nodes_in_view, get_hash_of_next_elem, get_hash_of_prev_elem,
-    get_node_from_hash, 
+    Page, PageNode, PageNodeType, EdgeElem, // add_hashes,
+    init_demo_page_data, update_dom_nodes_in_view,
 };
 
 // TODO: CUSTOMIZABLE MARKDOWN SYNTAX. E.G. IF YOU WANT `/` FOR ITALICS YOU CAN 
@@ -72,450 +72,674 @@ fn update_dims(start_elem: Vec<usize>) {
 #[component]
 pub fn EditablePage(cx: Scope) -> impl IntoView {
 
-    // TODO: * load in a Vec<PageNode> from file (same structure but w/o the RwSignal) *
+    let page_data: RwSignal<Page> = init_demo_page_data(cx);
+    let page_elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
 
-    let page_data: RwSignal<Page> = Page::signal_from(cx,
-        create_rw_signal(cx, Vec::new()),
-        EdgeElem::signal_from(cx, "".into(), 0, 0),
-        EdgeElem::signal_from(cx, "".into(), 0, 0),
-        create_rw_signal(cx, HashMap::new()),
-    );
-    page_data.update(|p| {
-        p.nodes.update(|n| {
-            for _ in 0..5 {
-                n.push(PageNode::signal_from(cx,
-                    "".into(), PageNodeType::H1,
-                    PageNodeContents::signal_from_children(
-                        cx, vec![
-                            PageNode::signal_from(cx,
-                                "".into(), PageNodeType::RawText,
-                                PageNodeContents::signal_from_content(
-                                    cx, HashMap::from([
-                                        ("text".to_string(), "some text".to_string())
-                                    ])
-                                ), 0
-                            )
-                        ]
-                    ), 0
-                ));
-                n.push(PageNode::signal_from(cx,
-                    "".into(), PageNodeType::TextBlock,
-                    PageNodeContents::signal_from_children(
-                        cx, vec![
-                            PageNode::signal_from(cx,
-                                "".into(), PageNodeType::RawText,
-                                PageNodeContents::signal_from_content(
-                                    cx, HashMap::from([
-                                        ("text".to_string(), "some text".to_string())
-                                    ])
-                                ), 0
-                            )
-                        ]
-                    ), 0
-                ));
-            }
-        })
-    });
-    add_hashes(page_data.get().nodes.get(), Vec::new(), page_data.get().locations);
-    // ==init top/bot-elem==
-
-    let top_hash = get_top_hash(&page_data.get().nodes.get());
-    // console_log(&format!("top hash: {:?}", top_hash));
-    page_data.get().top_elem.update(|e| e.hash = top_hash.clone());
-    page_data.get().bot_elem.update(|e| e.hash = top_hash);
-    // ==init nodes_in_view==
-    // update_nodes_in_view(cx, page_data);
-
-    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&10_i32))); // 4 bytes
-    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data))); // 20
-    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get()))); // 100
-    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes))); // 20
-    // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes.get()))); // 12
-
-    // let handle_keypress = move |event: web_sys::KeyboardEvent| {
-
-    //     // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
-    //     // EVERYTHING ELSE IS ALREADY FINE
-
-    //     // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
-
-    //     let selection = document().get_selection().unwrap().unwrap();
-    //     let key_code = event.key_code();
-    //     console_log(&format!("KEY: {:?}", key_code));
-    //     // first check selection type bc if no selection, and not a special 
-    //     // char, we don't need to do anything. if there is a selection though 
-    //     // be need to handle the deletion
-    //     let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
-
-    //     let keys = [
-    //         Key::Return.key_code(),
-    //         Key::Delete.key_code(),
-    //         Key::ForwardSlash.key_code(),
-    //     ];
-    //     if &sel_type == "Range" || keys.contains(&key_code) {
-    //         let nodes = page_data.get();
-
-    //         // FIXME: shit maybe i need hashing after-all w/ the hashes also 
-    //         // stored in a signal along with their paths. looks like it will 
-    //         // be very expensive to find the position of each child w/o it (if even possible)
-    //         let start_node = selection.anchor_node().unwrap();
-    //         let start_offset = selection.anchor_offset();
-
-    //         if &sel_type == "Range" {
-
-    //         } else {
-
-    //         }
-
-
-
-    //         // RETURN key pressed
-    //         if event.key_code() == 13 {
-    //             event.prevent_default();
-    //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
-    //             console_log(&format!("...: {:?}", parent));
-    //             // console_log(&format!("{:?}", selection.anchor_node().unwrap().parent_element().unwrap().get_attribute("block").unwrap()));
-
-    //         // DELETE key pressed
-    //         } else if event.key_code() == 8 {
-    //             // FIXME: only need to prevent default if the delete if the first 
-    //             // char in a block
-    //             event.prevent_default();
-
-    //             // TODO: i wonder if its better to immediately find the offset in 
-    //             // string, and current node, then edit the data for re-render 
-    //             // rather than any parsing of the DOM itself
-
-    //             // can't store location of each node in the element itself bc e.g. 
-    //             // when a node is removed you would have to update all elements in 
-    //             // the vec with their new indexes which defeats the purpose of 
-    //             // reactivity
-
-    //             let selection = document().get_selection().unwrap().unwrap();
-    //             let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
-                
-    //             // let node locatio
-
-    //             let offset = selection.anchor_offset();
-    //             let selected = selection.anchor_node().unwrap();
-    //             let len = selected.to_string().length();
-    //             console_log(&format!("SEL TYPE: {:?}", len));
-    //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
-    //             let kind = parent.get_attribute("node").unwrap();
-    //             console_log(&format!("TYPE: {:?}", kind));
-    //             // step 1, check if block or span, bc need to get to parent block
-    //             // if selection is at start of block, 
-    //             match kind.as_str() {
-    //                 // span
-    //                 "span" => {},
-    //                 // block
-    //                 _ => {},
-    //             }
-    //             // if parent.tag_name() == "MD" {
-    //             //     let md_elem = parent.parent_element().unwrap();
-    //             // }
-    //             // let full_page = 
-    //             console_log(&format!("KEY: {:?}", event.key_code()));
-    //         }
-    //     }
-    // };
-
-    // on-load render and get the height of 
-
-    // on-render, update height. don't worry about bottom items. they will 
-    // update once scrolled down to and then never have to have a weird scroll 
-    // again
-    // if an item changes it will re-render, and thus update its height
-    //
-    // only need to get height for leaf blocks, height of branches will not be 
-    // set, instead relying on their set padding values to add to the total 
-    // height calculation
-    // thus, we would also need to make sure that branch blocks do not contain 
-    // any raw text, instead must contain e.g. H1, but default text box
-
-    let elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
-
-    // TODO: ⬇️⬇️⬇️⬇️
-
-    // always render new page from the top
-
-    // init first-node and last-node in view to zero
-    // render node -> if node is not last, get next node, update last-node, 
-    // trigger reactive re-render, 
-
-    // on scroll/resize, update first/last-node, trigger reactive re-render
-
-    let init_render_toggle = create_rw_signal(cx, true);
-
-    // ==KEEP RERENDERING UNTIL EITHER BOT_ELEM IS ON THE BOTTOM EDGE OF THE 
-    // VIEW, OR IT IS THE LAST ELEMENT==
-    create_effect(cx, move |_| {
-        // console_log("RUNNING");
-        let refresh_toggle = init_render_toggle.get();
-        if let Some(elem) = elem_ref.get() {
-            request_animation_frame(move || {
-                let editor_bottom_edge = elem.get_bounding_client_rect().bottom();
-                let bot_elem_hash = page_data.get().bot_elem.get().hash;
-                // console_log(&format!("hash for selector:: {:?}", bot_elem_hash));
-                let bottom_elem = query_dom_page_node(&bot_elem_hash);
-                let bot_top_edge = bottom_elem.get_bounding_client_rect().top();
-                // console_log(&format!("editor:: {:?}", editor_bottom_edge));
-                // console_log(&format!("bottom elem:: {:?}", bot_top_edge));
-                if bot_top_edge < editor_bottom_edge {
-                    console_log("ELEM NOT AT BOTTOM");
-                    if let Some(next_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
-                        // console_log(&format!("next hash: {:?}", next_hash));
-                        // update bot_elem hash
-                        page_data.get().bot_elem.update(|e| e.hash = next_hash);
-                        // update nodes_in_view to trigger re-render
-                        // update_nodes_in_view(cx, page_data);
-                        // trigger refresh of this closure so bot_elem can 
-                        // change again if this is not the bottom element
-                        init_render_toggle.set(!refresh_toggle);
-                    };
-                }
-            });
-        } else {
-            // this will be just the first run while the elem_ref is still 
-            // empty bc haven't yet executed the `_ref=` thing in the view
-        }
-    });
-
-    // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP 
-    // RUNNING EVERYTIME THE SIGNAL CHANGES
-    // need to run this post-render to make sure to top-elem has its hash
-    // create_effect(cx, move |_| { 
-    //     let toggle = page_data.get().refresh_toggle;
-    //     request_animation_frame(move || {
-    //     page_data.update(|p| p.refresh_toggle = !p.refresh_toggle);
-    //     console_log("SET TOP_ELEM IF MISSING");
-
-    //     console_log(&format!("{:?}", page_data.get().refresh_toggle));
-
-    // }); });
-
-
-    // TODO: ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
-
-    let scroll_throttle = store_value(cx, 0.0);
-    let handle_scroll = move |event: web_sys::Event| {
-        // this is firing WAAAAAAAAY too quickly. so much so that if an element 
-        // from the top if removed, ALL elements immediately get removed before 
-        // the padding div is able to save them. thus, we need to throttle this 
-        // handler
-        // FIXME: WOOOOOOOOOOOOOOOOW THIS IS JANKY. back to the drawing board? render whole page at once?
-        let now = Date::now();
-        if now > scroll_throttle.get() + 200.0 {
-            scroll_throttle.set(now);
-        } else {
-            return;
-        }
-
-        // TODO: ONCE GET NEXT/PREV ELEM, QUERY ITS EDGE POSITION AND IF STILL 
-        // REQUIRES ANOTHER NEXT/PREV ELEM, KEEP GETTING THEM UNTIL WE ARE IN 
-        // RANGE !!!!!!!, AND ONLY THEN UPDATE THE TOP/BOT ELEM
-
-        // FIXME: I JUST REALIZED THIS WAY OF RENDERING MIGHT FUCK UP IF I 
-        // SCROLL TOO FAST, OR MORE IMPORTANTLY IF I CLICK A SUBHEADING IN THE 
-        // OUTLINE OR CLICK THE BOTTOM OF THE PAGE ON THE SCROLLBAR AND IT 
-        // JUMPS STRAIGHT THERE WITHOUT GIVING IT TIME TO RENDER
-        // prob some ways to patch this, but i wonder if there is a better was 
-        // to render altogether 🤔
-        // TODO: 🚨🚨🚨🚨🚨 hmm actually, what if the editable page element is simply a 
-        // <div id="knfkd" />, and i give it a f-tonne of callbacks and such 
-        // (avoiding leptos rendering) 🚨🚨🚨🚨🚨
-        // MIGHT EVEN BE THE WHOLE "ONLY RENDER NEXT ELEM" THING THAT'S FUCKING 
-        // EVERYTHING UP
-        // TODO: on the other hand, maybe i'm just computing WAAAAAAAAAY too much 
-        // shit (again with the recomputation every single next element). 
-        // perhaps only update base blocks ??????? also check to see where i'm 
-        // going overkill on the code
-        // TODO: REFERENCING DATA STRUCTURE MAY SPEED THINGS UP A LOOOOOOOOOOOOT
-        // TODO: PROBABLY ALSO DOESN'T HELP THAT BY USING <FOR>, THE WHOLE DATA 
-        // STRUCTURE NEEDS TO BE RELOADED AND REPROCESSED WITH EVERY NEW RENDER. 
-        // NOT TO MENTION ALL THE COPIES FOR ALL THE .GET() CALLS !!! ALL BC OF 
-        // THE <FOR>. GO CUSTOM
-        // TODO: I CAN USE NODEREF FOR DIRECT DOM MANIPULATION. COMPLETELY 
-        // BYPASSING LEPTOS !!!!!!!!!!!!!!!
-        // TODO: THEN AGAIN, ISNT LEPTOS FASTET BC IT SENDS HTML STRINGS 
-        // INSTEAD OF USING MANY DOM CALLS ?? I MIGHT NEED TO SIMPLY FIND A WAY 
-        // TO SYNC THE PADDING DIV UPDATE WITH THE PAGE NODES UPDATE
-
-        console_log("scroll");
-        let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
-        // let scroll_top = page_elem.scroll_top();
-        // console_log(&format!("SCROLL TOP: {:?}", scroll_top));
-        let page_top_edge = page_elem.get_bounding_client_rect().top();
-        let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
-
-        let top_elem = page_data.get().top_elem;
-        let bot_elem = page_data.get().bot_elem;
-
-        const REMOVE_DISTANCE: f64 = 50.0;
-        const ADD_DISTANCE: f64 = 20.0;
-
-        let mut top_done = false;
-        let mut bot_done = false;
-
-        let mut new_top_hash = top_elem.get().hash;
-        let mut new_bot_hash = bot_elem.get().hash;
-        let mut new_top_pad = top_elem.get().pad;
-        let mut new_bot_pad = bot_elem.get().pad;
-
-        // I'M LOOPING THE ENTIRE TOP AND BOTTOM INSTEAD OF MINILOOPS IN EACH 
-        // IF/ELSE-IF SO IF E.G. I SKIP RIGHT TO THE BOTTOM OF THE PAGE, SINCE 
-        // THE TOP IS CALLED FIRST, DERENDING ALL THE TOP NODES, IT WOULD 
-        // EVENTUALLY CRASH (?) BC THE TOP_ELEM WOULD GET BELOW THE BOT_ELEM
-
-        // FIXME: 🚨🚨🚨 OOPS THIS DOESN'T WORK BC THE LOGIC REQUIRES THE ADDED NODES TO HAVE RENDERED TO BE ABLE TO GET THEIR HEIGHT
-
-        // I THINK I SWAP TO CUSTOM REACTIVITY INSTEAD OF LEPTOS REACTVITY BC 
-        // LIKELY MUCH LESS COMPUTATION, AND EASIER, AND BETTER
-        // NOTE: SINCE WASM DOESN'T HAVE ACCESS TO DOM YET, TRY TO LIMIT DOM CALLS
-        // E.G. IF DELETING ALL THE CHILDREN NODES IN Vec::from([1]), just 
-        // delete the root node. also, MAY EVEN STEAL LEPTOS IDEA AND RENDER 
-        // ALL NEW NODES ADDED TO A STRING, THEN CONVERT TO. OH WAIT, IF RENDER 
-        // ALL AT ONCE I CAN'T RLY GET HEIGHT OF EACH ELEM EASILY
-
-        while !top_done || !bot_done {
-            let top_element = query_dom_page_node(&new_top_hash);
-            let top_elem_bot_edge = top_element.get_bounding_client_rect().bottom();
-            console_log(&format!("page_top_edge: {:?}", page_top_edge));
-            console_log(&format!("top_elem_bot_edge: {:?}", top_elem_bot_edge));
-            
-            let px_above_top = top_elem_bot_edge - page_top_edge;
-            console_log(&format!("px_above_top: {:?}", px_above_top));
-            // if px_above_top is less than ADD_DISTANCE, we need to 
-            // render the element above it
-            if px_above_top < ADD_DISTANCE {
-                // console_log("RENDER ONE ABOVE !!!");
-                if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_top_hash, page_data) {
-                    let height = get_node_from_hash(&prev_elem_hash, page_data)
-                        .unwrap().get().height;
-                    // rm previously added padding
-                    // if total is negative it is converted to 0 w/ `as u32`
-                    new_top_pad = (new_top_pad as f64 - height as f64) as u32;
-                    new_top_hash = prev_elem_hash;
-                } else {
-                    // if already first, we are done
-                    top_done = true;
-                }
-            // if bot edge of top_elem is greater than page_top_edge by 50px, we 
-            // need to remove the element
-            } else if px_above_top > REMOVE_DISTANCE {
-                // console_log("REMOVE TOP");
-                // update height of node
-                let height = top_element.get_bounding_client_rect().height();
-                // console_log(&format!("HEIGHT ADDED: {:?}", height));
-                console_log(&format!("HASH: {:?}", new_top_hash));
-                let top_node = get_node_from_hash(&new_top_hash, page_data).unwrap();
-                top_node.update(|n| n.height = height as u32);
-    
-                if let Some(next_elem_hash) = get_hash_of_next_elem(&new_top_hash, page_data) {
-                    new_top_pad = (new_top_pad as f64 + height) as u32;
-                    new_top_hash = next_elem_hash;
-                } else {
-                    // if already last, we are done
-                    top_done = true;
-                }
-            } else {
-                top_done = true;
-            }
-    
-            // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
-    
-            let bot_element = query_dom_page_node(&new_bot_hash);
-            let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
-            let px_below_bot = page_bot_edge - bot_elem_top_edge;
-            // if top edge of bot_elem is less than page_bot_edge, we need to 
-            // render the element below it
-            if px_below_bot < ADD_DISTANCE {
-                console_log("RENDER ONE BELOW");
-                if let Some(next_elem_hash) = get_hash_of_next_elem(&new_bot_hash, page_data) {
-                    new_bot_hash = next_elem_hash;
-                } else {
-                    // if already last, we are done
-                    bot_done = true;
-                }
-            // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
-            // need to remove the element
-            } else if px_below_bot > REMOVE_DISTANCE {
-                console_log("REMOVE BOT");
-                if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_bot_hash, page_data) {
-                    new_bot_hash = prev_elem_hash;
-                } else {
-                    // if already first, we are done
-                    bot_done = true;
-                }
-            } else {
-                bot_done = true;
-            }
-        }
-        // update top/bot elems to trigger re-render
-        if new_top_hash != top_elem.get().hash {
-            top_elem.update(|e| e.hash = new_top_hash)
-        }
-        if new_top_pad != top_elem.get().pad {
-            top_elem.update(|e| e.pad = new_top_pad)
-        }
-        if new_bot_hash != bot_elem.get().hash {
-            bot_elem.update(|e| e.hash = new_bot_hash)
-        }
-        if new_bot_pad != bot_elem.get().pad {
-            bot_elem.update(|e| e.pad = new_bot_pad)
-        }
+    let handle_scroll = move |_| {
+        update_dom_nodes_in_view(cx, page_data, page_elem_ref.get().unwrap().unchecked_ref::<web_sys::Element>());
     };
 
-    // create_effect(cx, move |_| {
-    //     request_animation_frame(move || {
-    //         console_log(&format!("{:?}", document().query_selector("[type=t]").unwrap().unwrap().get_bounding_client_rect().top()));
-    //     });
-    // });
+    let handle_keypress = move |_| {
 
-    // prob better to alter `padding` of top root elem instead of `top` (bc i dont think `top`/`bottom` would work)
+    };
 
-    let nodes_in_view = create_rw_signal(cx, Vec::new());
+    // TODO: CAN CONVERT MOST SIGNALS TO STORES OR BOXES OR SOMETHING THAT IS 
+    // JUST A REF BC DONT THINK I NEED A SIGNAL FOR ANYTHING. EVENT THE 
+    // CREATE_EFFECT USES A NODEREF, NOT A SIGNAL
 
+    // init render
     create_effect(cx, move |_| {
-        let locations = page_data.get().locations.get();
-        let top_elem = locations.get(
-            &page_data.get().top_elem.get().hash).unwrap();
-        let bot_elem = locations.get(
-            &page_data.get().bot_elem.get().hash).unwrap();
-        let new = get_nodes_in_view(cx, page_data.get().nodes.get(), top_elem, bot_elem);
-        nodes_in_view.set(new);
+        if let Some(page_elem) = page_elem_ref.get() {
+            request_animation_frame(move || {
+                let page_elem = page_elem.unchecked_ref::<web_sys::Element>().to_owned();
+                // TODO: use queryselector ON THE PAGE ELEM SO FASTER
+                // page_elem.query_selector(selectors).unwrap().unwrap();
+
+                log!("{}", "test");
+                log!("{}", std::mem::size_of_val(&page_elem));
+                // log!("{}", std::mem::size_of_val(page_elem));
+
+                let top_variable_padding = document().create_element("div").unwrap();
+                top_variable_padding.set_attribute("type", "top-pad").unwrap();
+                top_variable_padding.set_attribute("contenteditable", "false").unwrap();
+                top_variable_padding.set_attribute("style", "height: 0px").unwrap();
+                page_elem.append_child(&top_variable_padding).unwrap();
+
+                init_page_nodes(&page_elem, page_data.get().nodes.get());
+                get_all_node_heights(page_data.get().nodes.get());
+
+                let bot_fixed_padding = document().create_element("div").unwrap();
+                bot_fixed_padding.set_attribute("contenteditable", "false").unwrap();
+                bot_fixed_padding.set_attribute("style", "height: 50px").unwrap();
+                page_elem.append_child(&bot_fixed_padding).unwrap();
+
+                // setting the varible one as last bc easier to get it w/ page_elem.last_element()
+                let bot_variable_padding = document().create_element("div").unwrap();
+                bot_variable_padding.set_attribute("type", "bot-pad").unwrap();
+                bot_variable_padding.set_attribute("contenteditable", "false").unwrap();
+                bot_variable_padding.set_attribute("style", "height: 0px").unwrap();
+                page_elem.append_child(&bot_variable_padding).unwrap();
+
+                // MAYBE ADD OPTION<&ELEMENT> TO PAGENODE TYPE FOR ELEMENTS IN 
+                // VIEW SO DONT HAVE TO QUERY TO GET THE ELEMENT, AND SINCE 
+                // ITS JUST A REF, BUT IDK IF I EVEN NEED TO ACCESS ELEM ???
+
+                // TODO: UNCOMMENT WHEN FUNCTION IS FINISHED
+                // update_dom_nodes_in_view(cx, page_data, &page_elem);
+            })
+        }
     });
 
     view! {cx,
         <div contenteditable
-        style="overflow-y: auto; height:150px;"
+        style="overflow-y: auto; height: 150px;"
         type="page"
         on:scroll=handle_scroll
-        // on:keydown=handle_keypress
-        _ref=elem_ref
-        >
-            <div contenteditable="false" style=move || {
-                format!("height: {}px", page_data.get().top_elem.get().pad)
-            } />
-            <PageNodes
-            page_data=page_data
-            nodes=nodes_in_view />
-            <div contenteditable="false" style="height: 50px" />
-                // } />
-            // <div contenteditable="false" style=move || {
-            //     format!("height: {}px", page_data.get().bot_elem.get().pad)
-            // } />
-        </div>
+        on:keydown=handle_keypress
+        _ref=page_elem_ref
+        />
     }
 }
 
-/// query a PageNode element from the DOM by its hash
-fn query_dom_page_node(hash: &String) -> web_sys::Element {
-    // HASH CANNOT START WITH NUMBER LIKE THIS "[hash=29w8r]" BC IT CRASHES 
-    // QUERYSELECTOR. MUST USE "[hash=\"29w8r\"]" INSTEAD
-    let selector = format!("[hash=\"{}\"]", hash);
-    document().query_selector(&selector).unwrap().unwrap()
+pub fn get_all_node_heights(nodes: Vec<RwSignal<PageNode>>) {
+    for node_sig in nodes {
+        let node = node_sig.get();
+        if node.kind.is_block() {
+            let height = node.elem_ref.clone().unwrap()
+                .get_bounding_client_rect().height() as u32;
+            node_sig.update(|n| { n.height = height });
+            let children = node.children;
+            get_all_node_heights(children);
+        }
+    }
 }
+
+pub fn init_page_nodes(
+    mount_elem: &web_sys::Element,
+    nodes: Vec<RwSignal<PageNode>>,
+) {
+    // NOTE: CAN'T GET HEIGHTS W/ THIS FUNCTION BC YOU WOULD ONLY GET THE 
+    // HEIGHTS OF THE ITEMS MOUNTED TO THE mount_elem OF THE INITIAL CALL. ALL 
+    // THE OTHERS WOULD BE ZERO BC THEY'RE BEING MOUNTED TO ITEMS NOT YET 
+    // MOUNTED TO THE DOM
+    for node_sig in nodes {
+        let node = node_sig.get();
+        let children = node.children.clone();
+        if node.kind.is_block() {
+            let elem = match node.kind {
+                PageNodeType::H1 => {
+                    let elem = create_h1_elem(node);
+                    init_page_nodes(&elem, children);
+                    mount_elem.append_child(&elem).unwrap();
+                    elem
+                },
+                PageNodeType::TextBlock => {
+                    let elem = create_text_block_elem(node);
+                    init_page_nodes(&elem, children);
+                    mount_elem.append_child(&elem).unwrap();
+                    elem
+                },
+                _ => {
+                    let elem = create_unknown_block_elem(node);
+                    mount_elem.append_child(&elem).unwrap();
+                    elem
+                },
+            };
+            node_sig.update(|n| { n.elem_ref = Some(elem) });
+            continue;
+        }
+        match node.kind {
+            PageNodeType::RawText => {
+                let elem = create_raw_text_elem(node);
+                mount_elem.append_child(&elem).unwrap();
+            },
+            _ => {
+                let elem = create_unknown_span_elem(node);
+                mount_elem.append_child(&elem).unwrap();
+            },
+        }
+    }
+}
+
+// NOTE: `RwSignal` is required to update the `.elem_ref` properties
+pub fn create_elem(
+    node_sig: RwSignal<PageNode>,
+) -> Element {
+    let node = node_sig.get();
+    let children = node.children.clone();
+    let elem: Element;
+    if node.kind.is_block() {
+        elem = match node.kind {
+            PageNodeType::H1 => create_h1_elem(node),
+            PageNodeType::TextBlock => create_text_block_elem(node),
+            _ => create_unknown_block_elem(node),
+        };
+        node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
+    } else {
+        elem = match node.kind {
+            PageNodeType::RawText => create_raw_text_elem(node),
+            _ => create_unknown_span_elem(node),
+        };
+        // FIXME: CURRENTLY NOT ADDING REF BC IDK IF USEFUL, AND ONLY 
+        // CURRENTLY DELETE BLOCK REFS WHEN A DOM ELEM IS REMOVED
+        // node_sig.update(|n| { n.elem_ref = Some(elem) });
+    }
+    // add children if any
+    for child in children {
+        let child_elem = create_elem(child);
+        elem.append_child(&child_elem).unwrap();
+    }
+    elem
+}
+
+fn create_h1_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("type", PageNodeType::H1.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem
+}
+
+fn create_text_block_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem
+}
+
+fn create_unknown_block_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem.set_inner_html("‼️ block missing");
+    elem
+}
+
+fn create_raw_text_elem(node: PageNode) -> Element {
+    let elem = document().create_element("span").unwrap();
+    elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem.set_inner_html(node.content.get("text").unwrap());
+    elem
+}
+
+fn create_unknown_span_elem(node: PageNode) -> Element {
+    let elem = document().create_element("span").unwrap();
+    elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem.set_inner_html("‼️ only raw text allowed");
+    elem
+}
+
+// fn page_nodes(
+//     page_data: RwSignal<Page>,
+//     nodes: RwSignal<Vec<RwSignal<PageNode>>>,
+// ) -> Vec<web_sys::Element> {
+//     let mut elems = Vec::new();
+//     for node in nodes.get() {
+//         let node = node.get();
+//         let node_hash = node.hash.clone();
+//         match node.contents {
+//             PageNodeContents::Children(nodes) => {
+//                 match node.kind {
+//                     PageNodeType::H1 => {
+//                         let elem = document().create_element("div").unwrap();
+//                         elem.set_attribute("type", PageNodeType::H1.value()).unwrap();
+//                         elem.set_attribute("hash", &node_hash).unwrap();
+//                         for child in page_nodes(page_data, nodes) {
+//                             elem.append_child(&child).unwrap();
+//                         }
+//                         elems.push(elem);
+//                     },
+//                     PageNodeType::TextBlock => {
+//                         let elem = document().create_element("div").unwrap();
+//                         elem.set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
+//                         elem.set_attribute("hash", &node_hash).unwrap();
+//                         for child in page_nodes(page_data, nodes) {
+//                             elem.append_child(&child).unwrap();
+//                         }
+//                         elems.push(elem);
+//                     },
+//                     _ => {
+//                         let elem = document().create_element("div").unwrap();
+//                         elem.set_attribute("hash", &node_hash).unwrap();
+//                         elem.set_inner_html("‼️ block missing");
+//                         elems.push(elem);
+//                     },
+//                 }
+//             }
+//             PageNodeContents::Content(content) => {
+//                 match node.kind {
+//                     PageNodeType::RawText => {
+//                         let elem = document().create_element("span").unwrap();
+//                         elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
+//                         elem.set_attribute("hash", &node_hash).unwrap();
+//                         elem.set_inner_html(content.get().get("text").unwrap());
+//                         elems.push(elem);
+//                     },
+//                     _ => {
+//                         let elem = document().create_element("span").unwrap();
+//                         elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
+//                         elem.set_attribute("hash", &node_hash).unwrap();
+//                         elem.set_inner_html("‼️ only raw text allowed");
+//                         elems.push(elem);
+//                     },
+//                 }
+//             }
+//         }
+//     }
+//     elems
+// }
+
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+//                                     OLD
+
+// -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+
+// #[component]
+// pub fn OldEditablePage(cx: Scope) -> impl IntoView {
+
+//     // TODO: * load in a Vec<PageNode> from file (same structure but w/o the RwSignal) *
+
+//     let page_data: RwSignal<Page> = init_demo_page_data(cx);
+
+//     // ==init nodes_in_view==
+//     // update_nodes_in_view(cx, page_data);
+
+//     // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&10_i32))); // 4 bytes
+//     // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data))); // 20
+//     // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get()))); // 100
+//     // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes))); // 20
+//     // console_log(&format!("SIZE: {:?}", std::mem::size_of_val(&page_data.get().nodes.get()))); // 12
+
+//     // let handle_keypress = move |event: web_sys::KeyboardEvent| {
+
+//     //     // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
+//     //     // EVERYTHING ELSE IS ALREADY FINE
+
+//     //     // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
+
+//     //     let selection = document().get_selection().unwrap().unwrap();
+//     //     let key_code = event.key_code();
+//     //     console_log(&format!("KEY: {:?}", key_code));
+//     //     // first check selection type bc if no selection, and not a special 
+//     //     // char, we don't need to do anything. if there is a selection though 
+//     //     // be need to handle the deletion
+//     //     let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
+
+//     //     let keys = [
+//     //         Key::Return.key_code(),
+//     //         Key::Delete.key_code(),
+//     //         Key::ForwardSlash.key_code(),
+//     //     ];
+//     //     if &sel_type == "Range" || keys.contains(&key_code) {
+//     //         let nodes = page_data.get();
+
+//     //         // FIXME: shit maybe i need hashing after-all w/ the hashes also 
+//     //         // stored in a signal along with their paths. looks like it will 
+//     //         // be very expensive to find the position of each child w/o it (if even possible)
+//     //         let start_node = selection.anchor_node().unwrap();
+//     //         let start_offset = selection.anchor_offset();
+
+//     //         if &sel_type == "Range" {
+
+//     //         } else {
+
+//     //         }
+
+
+
+//     //         // RETURN key pressed
+//     //         if event.key_code() == 13 {
+//     //             event.prevent_default();
+//     //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
+//     //             console_log(&format!("...: {:?}", parent));
+//     //             // console_log(&format!("{:?}", selection.anchor_node().unwrap().parent_element().unwrap().get_attribute("block").unwrap()));
+
+//     //         // DELETE key pressed
+//     //         } else if event.key_code() == 8 {
+//     //             // FIXME: only need to prevent default if the delete if the first 
+//     //             // char in a block
+//     //             event.prevent_default();
+
+//     //             // TODO: i wonder if its better to immediately find the offset in 
+//     //             // string, and current node, then edit the data for re-render 
+//     //             // rather than any parsing of the DOM itself
+
+//     //             // can't store location of each node in the element itself bc e.g. 
+//     //             // when a node is removed you would have to update all elements in 
+//     //             // the vec with their new indexes which defeats the purpose of 
+//     //             // reactivity
+
+//     //             let selection = document().get_selection().unwrap().unwrap();
+//     //             let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
+                
+//     //             // let node locatio
+
+//     //             let offset = selection.anchor_offset();
+//     //             let selected = selection.anchor_node().unwrap();
+//     //             let len = selected.to_string().length();
+//     //             console_log(&format!("SEL TYPE: {:?}", len));
+//     //             let parent = selection.anchor_node().unwrap().parent_element().unwrap();
+//     //             let kind = parent.get_attribute("node").unwrap();
+//     //             console_log(&format!("TYPE: {:?}", kind));
+//     //             // step 1, check if block or span, bc need to get to parent block
+//     //             // if selection is at start of block, 
+//     //             match kind.as_str() {
+//     //                 // span
+//     //                 "span" => {},
+//     //                 // block
+//     //                 _ => {},
+//     //             }
+//     //             // if parent.tag_name() == "MD" {
+//     //             //     let md_elem = parent.parent_element().unwrap();
+//     //             // }
+//     //             // let full_page = 
+//     //             console_log(&format!("KEY: {:?}", event.key_code()));
+//     //         }
+//     //     }
+//     // };
+
+//     // on-load render and get the height of 
+
+//     // on-render, update height. don't worry about bottom items. they will 
+//     // update once scrolled down to and then never have to have a weird scroll 
+//     // again
+//     // if an item changes it will re-render, and thus update its height
+//     //
+//     // only need to get height for leaf blocks, height of branches will not be 
+//     // set, instead relying on their set padding values to add to the total 
+//     // height calculation
+//     // thus, we would also need to make sure that branch blocks do not contain 
+//     // any raw text, instead must contain e.g. H1, but default text box
+
+//     let elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
+
+//     // TODO: ⬇️⬇️⬇️⬇️
+
+//     // always render new page from the top
+
+//     // init first-node and last-node in view to zero
+//     // render node -> if node is not last, get next node, update last-node, 
+//     // trigger reactive re-render, 
+
+//     // on scroll/resize, update first/last-node, trigger reactive re-render
+
+//     let init_render_toggle = create_rw_signal(cx, true);
+
+//     // ==KEEP RERENDERING UNTIL EITHER BOT_ELEM IS ON THE BOTTOM EDGE OF THE 
+//     // VIEW, OR IT IS THE LAST ELEMENT==
+//     create_effect(cx, move |_| {
+//         // console_log("RUNNING");
+//         let refresh_toggle = init_render_toggle.get();
+//         if let Some(elem) = elem_ref.get() {
+//             request_animation_frame(move || {
+//                 let editor_bottom_edge = elem.get_bounding_client_rect().bottom();
+//                 let bot_elem_hash = page_data.get().bot_elem.get().hash;
+//                 // console_log(&format!("hash for selector:: {:?}", bot_elem_hash));
+//                 let bottom_elem = query_dom_page_node(&bot_elem_hash);
+//                 let bot_top_edge = bottom_elem.get_bounding_client_rect().top();
+//                 // console_log(&format!("editor:: {:?}", editor_bottom_edge));
+//                 // console_log(&format!("bottom elem:: {:?}", bot_top_edge));
+//                 if bot_top_edge < editor_bottom_edge {
+//                     console_log("ELEM NOT AT BOTTOM");
+//                     if let Some(next_hash) = get_hash_of_next_elem(&bot_elem_hash, page_data) {
+//                         // console_log(&format!("next hash: {:?}", next_hash));
+//                         // update bot_elem hash
+//                         page_data.get().bot_elem.update(|e| e.hash = next_hash);
+//                         // update nodes_in_view to trigger re-render
+//                         // update_nodes_in_view(cx, page_data);
+//                         // trigger refresh of this closure so bot_elem can 
+//                         // change again if this is not the bottom element
+//                         init_render_toggle.set(!refresh_toggle);
+//                     };
+//                 }
+//             });
+//         } else {
+//             // this will be just the first run while the elem_ref is still 
+//             // empty bc haven't yet executed the `_ref=` thing in the view
+//         }
+//     });
+
+//     // FIXME: MIGHT NEED TO REMOVE THE `create_effect` SO IT DOESNT KEEP 
+//     // RUNNING EVERYTIME THE SIGNAL CHANGES
+//     // need to run this post-render to make sure to top-elem has its hash
+//     // create_effect(cx, move |_| { 
+//     //     let toggle = page_data.get().refresh_toggle;
+//     //     request_animation_frame(move || {
+//     //     page_data.update(|p| p.refresh_toggle = !p.refresh_toggle);
+//     //     console_log("SET TOP_ELEM IF MISSING");
+
+//     //     console_log(&format!("{:?}", page_data.get().refresh_toggle));
+
+//     // }); });
+
+
+//     // TODO: ALSO NEED TO SET TOP PADDING RIGHT AFTER INITIAL RENDER, AND SET SCROLL POSITION
+
+//     let scroll_throttle = store_value(cx, 0.0);
+//     let handle_scroll = move |event: web_sys::Event| {
+//         // this is firing WAAAAAAAAY too quickly. so much so that if an element 
+//         // from the top if removed, ALL elements immediately get removed before 
+//         // the padding div is able to save them. thus, we need to throttle this 
+//         // handler
+//         // FIXME: WOOOOOOOOOOOOOOOOW THIS IS JANKY. back to the drawing board? render whole page at once?
+//         let now = Date::now();
+//         if now > scroll_throttle.get() + 200.0 {
+//             scroll_throttle.set(now);
+//         } else {
+//             return;
+//         }
+
+//         // TODO: ONCE GET NEXT/PREV ELEM, QUERY ITS EDGE POSITION AND IF STILL 
+//         // REQUIRES ANOTHER NEXT/PREV ELEM, KEEP GETTING THEM UNTIL WE ARE IN 
+//         // RANGE !!!!!!!, AND ONLY THEN UPDATE THE TOP/BOT ELEM
+
+//         // FIXME: I JUST REALIZED THIS WAY OF RENDERING MIGHT FUCK UP IF I 
+//         // SCROLL TOO FAST, OR MORE IMPORTANTLY IF I CLICK A SUBHEADING IN THE 
+//         // OUTLINE OR CLICK THE BOTTOM OF THE PAGE ON THE SCROLLBAR AND IT 
+//         // JUMPS STRAIGHT THERE WITHOUT GIVING IT TIME TO RENDER
+//         // prob some ways to patch this, but i wonder if there is a better was 
+//         // to render altogether 🤔
+//         // TODO: 🚨🚨🚨🚨🚨 hmm actually, what if the editable page element is simply a 
+//         // <div id="knfkd" />, and i give it a f-tonne of callbacks and such 
+//         // (avoiding leptos rendering) 🚨🚨🚨🚨🚨
+//         // MIGHT EVEN BE THE WHOLE "ONLY RENDER NEXT ELEM" THING THAT'S FUCKING 
+//         // EVERYTHING UP
+//         // TODO: on the other hand, maybe i'm just computing WAAAAAAAAAY too much 
+//         // shit (again with the recomputation every single next element). 
+//         // perhaps only update base blocks ??????? also check to see where i'm 
+//         // going overkill on the code
+//         // TODO: REFERENCING DATA STRUCTURE MAY SPEED THINGS UP A LOOOOOOOOOOOOT
+//         // TODO: PROBABLY ALSO DOESN'T HELP THAT BY USING <FOR>, THE WHOLE DATA 
+//         // STRUCTURE NEEDS TO BE RELOADED AND REPROCESSED WITH EVERY NEW RENDER. 
+//         // NOT TO MENTION ALL THE COPIES FOR ALL THE .GET() CALLS !!! ALL BC OF 
+//         // THE <FOR>. GO CUSTOM
+//         // TODO: I CAN USE NODEREF FOR DIRECT DOM MANIPULATION. COMPLETELY 
+//         // BYPASSING LEPTOS !!!!!!!!!!!!!!!
+//         // TODO: THEN AGAIN, ISNT LEPTOS FASTET BC IT SENDS HTML STRINGS 
+//         // INSTEAD OF USING MANY DOM CALLS ?? I MIGHT NEED TO SIMPLY FIND A WAY 
+//         // TO SYNC THE PADDING DIV UPDATE WITH THE PAGE NODES UPDATE
+
+//         console_log("scroll");
+//         let page_elem: HtmlDivElement = event.target().unwrap().dyn_into().unwrap();
+//         // let scroll_top = page_elem.scroll_top();
+//         // console_log(&format!("SCROLL TOP: {:?}", scroll_top));
+//         let page_top_edge = page_elem.get_bounding_client_rect().top();
+//         let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
+
+//         let top_elem = page_data.get().top_elem;
+//         let bot_elem = page_data.get().bot_elem;
+
+//         const REMOVE_DISTANCE: f64 = 50.0;
+//         const ADD_DISTANCE: f64 = 20.0;
+
+//         let mut top_done = false;
+//         let mut bot_done = false;
+
+//         let mut new_top_hash = top_elem.get().hash;
+//         let mut new_bot_hash = bot_elem.get().hash;
+//         let mut new_top_pad = top_elem.get().pad;
+//         let mut new_bot_pad = bot_elem.get().pad;
+
+//         // I'M LOOPING THE ENTIRE TOP AND BOTTOM INSTEAD OF MINILOOPS IN EACH 
+//         // IF/ELSE-IF SO IF E.G. I SKIP RIGHT TO THE BOTTOM OF THE PAGE, SINCE 
+//         // THE TOP IS CALLED FIRST, DERENDING ALL THE TOP NODES, IT WOULD 
+//         // EVENTUALLY CRASH (?) BC THE TOP_ELEM WOULD GET BELOW THE BOT_ELEM
+
+//         // FIXME: 🚨🚨🚨 OOPS THIS DOESN'T WORK BC THE LOGIC REQUIRES THE ADDED NODES TO HAVE RENDERED TO BE ABLE TO GET THEIR HEIGHT
+
+//         // I THINK I SWAP TO CUSTOM REACTIVITY INSTEAD OF LEPTOS REACTVITY BC 
+//         // LIKELY MUCH LESS COMPUTATION, AND EASIER, AND BETTER
+//         // NOTE: SINCE WASM DOESN'T HAVE ACCESS TO DOM YET, TRY TO LIMIT DOM CALLS
+//         // E.G. IF DELETING ALL THE CHILDREN NODES IN Vec::from([1]), just 
+//         // delete the root node. also, MAY EVEN STEAL LEPTOS IDEA AND RENDER 
+//         // ALL NEW NODES ADDED TO A STRING, THEN CONVERT TO. OH WAIT, IF RENDER 
+//         // ALL AT ONCE I CAN'T RLY GET HEIGHT OF EACH ELEM EASILY
+
+//         while !top_done || !bot_done {
+//             let top_element = query_dom_page_node(&new_top_hash);
+//             let top_elem_bot_edge = top_element.get_bounding_client_rect().bottom();
+//             console_log(&format!("page_top_edge: {:?}", page_top_edge));
+//             console_log(&format!("top_elem_bot_edge: {:?}", top_elem_bot_edge));
+            
+//             let px_above_top = top_elem_bot_edge - page_top_edge;
+//             console_log(&format!("px_above_top: {:?}", px_above_top));
+//             // if px_above_top is less than ADD_DISTANCE, we need to 
+//             // render the element above it
+//             if px_above_top < ADD_DISTANCE {
+//                 // console_log("RENDER ONE ABOVE !!!");
+//                 if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_top_hash, page_data) {
+//                     let height = get_node_from_hash(&prev_elem_hash, page_data)
+//                         .unwrap().get().height;
+//                     // rm previously added padding
+//                     // if total is negative it is converted to 0 w/ `as u32`
+//                     new_top_pad = (new_top_pad as f64 - height as f64) as u32;
+//                     new_top_hash = prev_elem_hash;
+//                 } else {
+//                     // if already first, we are done
+//                     top_done = true;
+//                 }
+//             // if bot edge of top_elem is greater than page_top_edge by 50px, we 
+//             // need to remove the element
+//             } else if px_above_top > REMOVE_DISTANCE {
+//                 // console_log("REMOVE TOP");
+//                 // update height of node
+//                 let height = top_element.get_bounding_client_rect().height();
+//                 // console_log(&format!("HEIGHT ADDED: {:?}", height));
+//                 console_log(&format!("HASH: {:?}", new_top_hash));
+//                 let top_node = get_node_from_hash(&new_top_hash, page_data).unwrap();
+//                 top_node.update(|n| n.height = height as u32);
+    
+//                 if let Some(next_elem_hash) = get_hash_of_next_elem(&new_top_hash, page_data) {
+//                     new_top_pad = (new_top_pad as f64 + height) as u32;
+//                     new_top_hash = next_elem_hash;
+//                 } else {
+//                     // if already last, we are done
+//                     top_done = true;
+//                 }
+//             } else {
+//                 top_done = true;
+//             }
+    
+//             // TODO: CALC TOTAL HEIGHT WHEN HIT BOTTOM AND ADD PADDING DIV ACCORDING TO THAT ???????? (making sure padding > 0)
+    
+//             let bot_element = query_dom_page_node(&new_bot_hash);
+//             let bot_elem_top_edge = bot_element.get_bounding_client_rect().top();
+//             let px_below_bot = page_bot_edge - bot_elem_top_edge;
+//             // if top edge of bot_elem is less than page_bot_edge, we need to 
+//             // render the element below it
+//             if px_below_bot < ADD_DISTANCE {
+//                 console_log("RENDER ONE BELOW");
+//                 if let Some(next_elem_hash) = get_hash_of_next_elem(&new_bot_hash, page_data) {
+//                     new_bot_hash = next_elem_hash;
+//                 } else {
+//                     // if already last, we are done
+//                     bot_done = true;
+//                 }
+//             // if top edge of bot_elem is greater than page_bot_edge by 50px, we 
+//             // need to remove the element
+//             } else if px_below_bot > REMOVE_DISTANCE {
+//                 console_log("REMOVE BOT");
+//                 if let Some(prev_elem_hash) = get_hash_of_prev_elem(&new_bot_hash, page_data) {
+//                     new_bot_hash = prev_elem_hash;
+//                 } else {
+//                     // if already first, we are done
+//                     bot_done = true;
+//                 }
+//             } else {
+//                 bot_done = true;
+//             }
+//         }
+//         // update top/bot elems to trigger re-render
+//         if new_top_hash != top_elem.get().hash {
+//             top_elem.update(|e| e.hash = new_top_hash)
+//         }
+//         if new_top_pad != top_elem.get().pad {
+//             top_elem.update(|e| e.pad = new_top_pad)
+//         }
+//         if new_bot_hash != bot_elem.get().hash {
+//             bot_elem.update(|e| e.hash = new_bot_hash)
+//         }
+//         if new_bot_pad != bot_elem.get().pad {
+//             bot_elem.update(|e| e.pad = new_bot_pad)
+//         }
+//     };
+
+//     // create_effect(cx, move |_| {
+//     //     request_animation_frame(move || {
+//     //         console_log(&format!("{:?}", document().query_selector("[type=t]").unwrap().unwrap().get_bounding_client_rect().top()));
+//     //     });
+//     // });
+
+//     // prob better to alter `padding` of top root elem instead of `top` (bc i dont think `top`/`bottom` would work)
+
+//     let nodes_in_view = create_rw_signal(cx, Vec::new());
+
+//     create_effect(cx, move |_| {
+//         let locations = page_data.get().locations.get();
+//         let top_elem = locations.get(
+//             &page_data.get().top_elem.get().hash).unwrap();
+//         let bot_elem = locations.get(
+//             &page_data.get().bot_elem.get().hash).unwrap();
+//         let new = get_nodes_in_view(cx, page_data.get().nodes.get(), top_elem, bot_elem);
+//         nodes_in_view.set(new);
+//     });
+
+//     view! {cx,
+//         <div contenteditable
+//         style="overflow-y: auto; height:150px;"
+//         type="page"
+//         on:scroll=handle_scroll
+//         // on:keydown=handle_keypress
+//         _ref=elem_ref
+//         >
+//             <div contenteditable="false" style=move || {
+//                 format!("height: {}px", page_data.get().top_elem.get().pad)
+//             } />
+//             <PageNodes
+//             page_data=page_data
+//             nodes=nodes_in_view />
+//             <div contenteditable="false" style="height: 50px" />
+//                 // } />
+//             // <div contenteditable="false" style=move || {
+//             //     format!("height: {}px", page_data.get().bot_elem.get().pad)
+//             // } />
+//         </div>
+//     }
+// }
+
+// // FIXME: REPLACE DOCUMENT() W/ PAGE_ELEM
+// /// query a PageNode element from the DOM by its hash
+// fn query_dom_page_node(hash: &String) -> web_sys::Element {
+//     // HASH CANNOT START WITH NUMBER LIKE THIS "[hash=29w8r]" BC IT CRASHES 
+//     // QUERYSELECTOR. MUST USE "[hash=\"29w8r\"]" INSTEAD
+//     let selector = format!("[hash=\"{}\"]", hash);
+//     document().query_selector(&selector).unwrap().unwrap()
+// }
 
 // TODO: if compare doesn't work to find the number of the child, use the hash after-all, purely for unique child-nodes. ohhhh wait this wouldn't work bc i'm not rendering all the nodes to the page. MAYBE BETTER TO JUST SAY FUCK REACTVITY AND RE-RENDER ALL VISIBLE (AT LEAST ALL THAT NEED TO UPDATE INDEXES) WHEN UPDATE OCCURS
 
@@ -546,74 +770,74 @@ fn query_dom_page_node(hash: &String) -> web_sys::Element {
 //   .then((digestHex) => console.log(digestHex));
 
 
-// TODO: 
-/// update all hash postions for all nodes in the level post-insert/delete
-fn update_positions() {
+// // TODO: 
+// /// update all hash postions for all nodes in the level post-insert/delete
+// fn update_positions() {
 
-}
+// }
 
-#[component]
-pub fn PageNodes(cx: Scope,
-    page_data: RwSignal<Page>,
-    nodes: RwSignal<Vec<RwSignal<PageNode>>>,
-) -> impl IntoView {
+// #[component]
+// pub fn PageNodes(cx: Scope,
+//     page_data: RwSignal<Page>,
+//     nodes: RwSignal<Vec<RwSignal<PageNode>>>,
+// ) -> impl IntoView {
 
-    // TODO: COMMIT, THEN TEST CONVERSION TO <FOR />. IF THE UPDATING FROM 
-    // SCROLLING IS NOT REACTIVE, REVERT MOST CHANGES AND DO MANUAL DOM 
-    // UPDATES IN SCROLL HANDLER
+//     // TODO: COMMIT, THEN TEST CONVERSION TO <FOR />. IF THE UPDATING FROM 
+//     // SCROLLING IS NOT REACTIVE, REVERT MOST CHANGES AND DO MANUAL DOM 
+//     // UPDATES IN SCROLL HANDLER
 
-    // TODO: COMMIT CHANGES, THE DECIDE ON EITHER PLACING ABOVE CODE IN THE 
-    // view!{} so it executes on every update, OR, leave this function as an 
-    // init component, and update the DOM directly in the scroll-handler
+//     // TODO: COMMIT CHANGES, THE DECIDE ON EITHER PLACING ABOVE CODE IN THE 
+//     // view!{} so it executes on every update, OR, leave this function as an 
+//     // init component, and update the DOM directly in the scroll-handler
 
-    view! {cx,
-        <For each=nodes key=|n| n.get().hash view=move |node| {
-            let node = node.get();
-            let node_hash = node.hash.clone();
-            match node.contents {
-                PageNodeContents::Children(nodes) => {
-                    match node.kind {
-                        PageNodeType::H1 => view! {cx,
-                            <div //contenteditable
-                            type=PageNodeType::H1.value()
-                            hash=node_hash>
-                                <PageNodes page_data nodes  />
-                            </div>
-                        },
-                        PageNodeType::TextBlock => view! {cx,
-                            <div
-                            type=PageNodeType::TextBlock.value()
-                            hash=&node.hash>
-                                <PageNodes page_data nodes  />
-                            </div>
-                        },
-                        _ => view! {cx,
-                            <div hash=node_hash>"‼️ block missing"</div>
-                        },
-                    }.into_any()
-                }
-                PageNodeContents::Content(content) => {
-                    match node.kind {
-                        PageNodeType::RawText => view! {cx,
-                            <span
-                            type=PageNodeType::RawText.value()
-                            hash=node_hash>
-                                {content.get().get("text").unwrap()}
-                            </span>
-                        },
-                        _ => view! {cx,
-                            <span
-                            type=PageNodeType::RawText.value()
-                            hash=node_hash>
-                                "‼️ only raw text allowed"
-                            </span>
-                        },
-                    }.into_any()
-                }
-            }
-        }/>
-    }
-}
+//     view! {cx,
+//         <For each=nodes key=|n| n.get().hash view=move |node| {
+//             let node = node.get();
+//             let node_hash = node.hash.clone();
+//             match node.contents {
+//                 PageNodeContents::Children(nodes) => {
+//                     match node.kind {
+//                         PageNodeType::H1 => view! {cx,
+//                             <div //contenteditable
+//                             type=PageNodeType::H1.value()
+//                             hash=node_hash>
+//                                 <PageNodes page_data nodes  />
+//                             </div>
+//                         },
+//                         PageNodeType::TextBlock => view! {cx,
+//                             <div
+//                             type=PageNodeType::TextBlock.value()
+//                             hash=&node.hash>
+//                                 <PageNodes page_data nodes  />
+//                             </div>
+//                         },
+//                         _ => view! {cx,
+//                             <div hash=node_hash>"‼️ block missing"</div>
+//                         },
+//                     }.into_any()
+//                 }
+//                 PageNodeContents::Content(content) => {
+//                     match node.kind {
+//                         PageNodeType::RawText => view! {cx,
+//                             <span
+//                             type=PageNodeType::RawText.value()
+//                             hash=node_hash>
+//                                 {content.get().get("text").unwrap()}
+//                             </span>
+//                         },
+//                         _ => view! {cx,
+//                             <span
+//                             type=PageNodeType::RawText.value()
+//                             hash=node_hash>
+//                                 "‼️ only raw text allowed"
+//                             </span>
+//                         },
+//                     }.into_any()
+//                 }
+//             }
+//         }/>
+//     }
+// }
 
 // #[component]
 // pub fn InlineStyle(cx: Scope, nodes: RwSignal<Vec<PageNode>>, kind: &str) -> Element {

@@ -1,48 +1,302 @@
-use leptos::{Scope, RwSignal, create_rw_signal, console_log, document};
-use super::{Page, PageNode, PageNodeContents};
+use leptos::{log, Scope, RwSignal, create_rw_signal, console_log, document};
+use web_sys::Element;
+use super::{Page, PageNode, create_elem};
 
-pub fn get_top_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
-    let mut top_hash = nodes[0].get().hash;
-    // console_log(&format!("top hash: {:?}", top_hash));
-    let mut node = nodes[0].get();
-    loop {
-        match node.contents {
-            PageNodeContents::Children(children) => {
-                // if children are not blocks, this is the final block node
-                let first_child = children.get()[0].get();
-                if !children.get()[0].get().kind.is_block() {
-                    break;
-                }
-                top_hash = node.hash;
-                node = first_child;
+pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem: &Element) {
+
+    let page_top_edge = page_elem.get_bounding_client_rect().top();
+    let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
+
+    let top_elem_data = page_data.get().top_elem;
+    let bot_elem_data = page_data.get().bot_elem;
+
+    const REMOVE_DISTANCE: f64 = 50.0;
+    const ADD_DISTANCE: f64 = 20.0;
+
+    let mut top_done = false;
+    let mut bot_done = true;
+
+    let mut new_top_node = top_elem_data.get().node_sig;
+    let mut new_bot_node = bot_elem_data.get().node_sig;
+    let mut new_top_pad = top_elem_data.get().pad;
+    let mut new_bot_pad = bot_elem_data.get().pad;
+
+    // I'M LOOPING THE ENTIRE TOP AND BOTTOM INSTEAD OF MINILOOPS IN EACH 
+    // IF/ELSE-IF SO IF E.G. I SKIP RIGHT TO THE BOTTOM OF THE PAGE, SINCE 
+    // THE TOP IS CALLED FIRST, DERENDING ALL THE TOP NODES, IT WOULD 
+    // EVENTUALLY CRASH (?) BC THE TOP_ELEM WOULD GET BELOW THE BOT_ELEM
+
+    // OHHH, IF A REMOVE AN ELEM > 3, IT SHOUDL IMMEDIATELY TRIGGER A RE-ADD 
+    // WHICH FUCKS EVERYTHING UP, SO I NEED TO INCORPORATE. wait no this is 
+    // what the padding is for..
+
+    /*
+    if we use bottom edge detection for both adding and removing top elems, 
+    this can happen:
+
+    if a node is too big, when the top node above it is removed, and it becomes 
+    the top node, it automatically triggers a re-render of the top node that 
+    was just removed, leaving you in an infinite loop
+
+    │   ⬆️   │
+    └───────┘ --------       <- remove if bottom of top node is above
+    ┌───────┐
+    │   ⬆️   │
+    │   ⬆️   │
+    │   ⬆️   │ --------       <- add if bottom of top node is below
+    │   ⬆️   │
+    └───────┘
+
+    thus we instead add if the TOP of the top node goes below the lower line
+    */
+
+    while !top_done || !bot_done {
+        {
+        let new_top_elem = new_top_node.get().elem_ref.unwrap();
+        let top_elem_top_edge = new_top_elem.get_bounding_client_rect().top();
+        let top_elem_bot_edge = new_top_elem.get_bounding_client_rect().bottom();
+        let px_top_above_top = page_top_edge - top_elem_top_edge;
+        let px_bot_above_top = page_top_edge - top_elem_bot_edge;
+        // ==RENDER THE ELEMENT ABOVE IT==
+        if true && px_top_above_top < ADD_DISTANCE {
+            // NOTE: THIS TRIGGERS AT TOP OF PAGE BC TOP NODE IS STILL UNDER 
+            // THE TOP OF PAGE (but obv not the if statement below)
+            if let Some(prev_node) = get_prev_block_node(&new_top_node.get().hash, page_data) {
+                // add node to page
+                let height = insert_new_node_before(cx, &page_elem, prev_node);
+                // rm previously added padding
+                // if total is negative (should never be) it is converted to 0 w/ `as u32`
+                new_top_pad = (new_top_pad as f64 - height as f64) as u32;
+                new_top_node = prev_node;
+                page_elem.first_element_child().unwrap().set_attribute(
+                    "style", &format!("height: {}px", new_top_pad)).unwrap();
+            } else {
+                // if already first, we are done
+                top_done = true;
             }
-            PageNodeContents::Content(_) => break,
+        // ==REMOVE THE TOP ELEMENT==
+        } else if px_bot_above_top > REMOVE_DISTANCE {
+            // can only remove the current top element if there is 
+            // a next element to become the top
+            if let Some(next_node) = get_next_block_node(&new_top_node.get().hash, page_data) {
+                // remove current top node
+                let height = remove_top_elem_from_dom(new_top_node);
+                // set next node to top elem
+                new_top_pad = new_top_pad + height;
+                new_top_node = next_node;
+                page_elem.first_element_child().unwrap().set_attribute(
+                    "style", &format!("height: {}px", new_top_pad)).unwrap();
+            } else {
+                // if already last, we are done
+                top_done = true;
+            }
+        } else {
+            top_done = true;
         }
+        }
+        // log!("WHILE LOOP: bot node hash: {}", new_bot_node.get().hash);
+        // let new_bot_elem = new_bot_node.get().elem_ref.unwrap();
+        // let bot_elem_top_edge = new_bot_elem.get_bounding_client_rect().top();
+        // let bot_elem_bot_edge = new_bot_elem.get_bounding_client_rect().bottom();
+        // let px_top_below_bot = bot_elem_top_edge - page_bot_edge;
+        // let px_bot_below_bot = bot_elem_bot_edge - page_bot_edge;
+        // // log!("page-bot: {:?}, bot-elem-edge: {:?}", page_bot_edge, bot_elem_top_edge);
+        // // log!("px_below_bot: {:?}", px_below_bot);
+        // // ==RENDER THE ELEMENT BELOW IT==
+        // if px_bot_below_bot < ADD_DISTANCE {
+        //     log!("ADD");
+        //     if let Some(next_node) = get_next_block_node(&new_bot_node.get().hash, page_data) {
+        //         // new_bot_node = next_node;
+        //     } else {
+        //         // if already last, we are done
+        //         bot_done = true;
+        //     }
+        // // ==REMOVE THE BOT ELEMENT==
+        // } else if px_top_below_bot > REMOVE_DISTANCE {
+        //     log!("REMOVE");
+        //     if let Some(prev_node) = get_prev_block_node(&new_bot_node.get().hash, page_data) {
+        //         // // remove current top node
+        //         // new_bot_node.get().elem_ref.unwrap().remove();
+        //         // // set prev node to top elem
+        //         // new_bot_node = prev_node;
+        //     } else {
+        //         // if already first, we are done
+        //         bot_done = true;
+        //     }
+        // } else {
+        //     bot_done = true;
+        // }
     }
-    top_hash
+    let new_top_hash = new_top_node.get().hash;
+    if new_top_hash != top_elem_data.get().hash {
+        top_elem_data.update(|e| {
+            e.hash = new_top_hash;
+            e.pad = new_top_pad;
+            e.node_sig = new_top_node;
+        });
+    }
+    let new_bot_hash = new_bot_node.get().hash;
+    if new_bot_hash != bot_elem_data.get().hash {
+        bot_elem_data.update(|e| {
+            e.hash = new_bot_hash;
+            e.pad = new_bot_pad;
+            e.node_sig = new_bot_node;
+        })
+    }
 }
-fn get_bot_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
-    let mut last_idx = nodes.len() - 1;
-    let mut bot_hash = nodes[last_idx].get().hash;
-    // console_log(&format!("top hash: {:?}", top_hash));
-    let mut node = nodes[last_idx].get();
+
+fn insert_new_node_before(cx: Scope, page_elem: &Element,
+new_node: RwSignal<PageNode>) -> u32 {
+    // 1. INSERT THE PREV NODE ALONG WITH ALL ITS PARENTS IF THEY DON'T EXIST
+    // 2. ADD DOM_REF TO THE NODE
+    // 3. CALCULATE THE HEIGHT ITS USING (INCLUDING ANY PARENT NODES, E.G. 
+    // BLOCK PADDING) AND, THEN UPDATE THE PADDING DIV BY REMOVING THE HEIGHT
+    let mut child_node = new_node;
+    let mut total_height = 0;
+    let mut new_child_elem: Element = create_elem(child_node); // only using vec so ik when no elem present
+    child_node.update(|n| {
+        n.elem_ref = Some(new_child_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
+    });
+    // if this is the last child, we must add its parent
+    // if the parent is the last child of its parent, we must add its parent, etc
     loop {
-        match node.contents {
-            PageNodeContents::Children(children) => {
-                // if children are not blocks, this is the final block node
-                let child_nodes = children.get();
-                last_idx = child_nodes.len() - 1;
-                let last_child = child_nodes[last_idx].get();
-                if !child_nodes[last_idx].get().kind.is_block() {
-                    break;
+        if let Some(parent_node) = child_node.get().parent {
+            let children = parent_node.get().children;
+            let is_last_child = {
+                let num_children = children.len();
+                let last_child = children[num_children - 1].clone();
+                child_node.get().hash == last_child.get().hash
+            };
+            if is_last_child {
+                // if child is last child, it means we have to add the parent node too
+                let castrated_parent_elem = {
+                    let mut parent = parent_node.get();
+                    parent.children = Vec::new();
+                    let node_sig = create_rw_signal(cx, parent);
+                    create_elem(node_sig)
+                };
+                castrated_parent_elem.append_child(&new_child_elem).unwrap();
+                // need to update the ref of the parent node bc while 
+                // `create_elem()` updates all `.elem_ref` of each `PageNode`, 
+                // we passed it the castrated_parent rather than the actual 
+                // parent, so the parent node itself didnt' get updated
+                parent_node.update(|n| {
+                    n.elem_ref = Some(castrated_parent_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
+                });
+                new_child_elem = castrated_parent_elem;
+                child_node = parent_node;
+            } else {
+                for i in 0..children.len() {
+                    // FIRST CHILD W/ .ELEM_REF = SOME() WILL BE THE child_node 
+                    // ITSELF BC IF ITS THE FIRST child_node WE SET THE 
+                    // .ELEM_REF BEFORE THE LOOP, AND IF IT'S A PARENT, WE SET 
+                    // THE .ELEM_REF WHEN WE CHANGE child_node TO THE PARENT
+                    if let Some(_) = children[i].get().elem_ref {
+                        // get the first rendered (i.e. rendered to DOM) child, 
+                        // and insert new elem before it
+                        let first_rendered_child = children[i+1].get().elem_ref.unwrap();
+                        // no need to update refs bc they have already been 
+                        // update either before the loop or in prior loops
+                        let parent_elem = parent_node.get().elem_ref.unwrap();
+                        parent_elem.insert_before(
+                            &new_child_elem, 
+                            Some(&first_rendered_child)).unwrap();
+                        total_height = new_child_elem.get_bounding_client_rect().height() as u32;
+                        break;
+                    }
                 }
-                bot_hash = node.hash;
-                node = last_child;
+                break;
             }
-            PageNodeContents::Content(_) => break,
+        } else {
+            // if no parent, we add from the page_elem
+            let elem_to_add_before = page_elem.first_element_child().unwrap().next_element_sibling().unwrap();
+            page_elem.insert_before(
+                &new_child_elem, 
+                Some(&elem_to_add_before)).unwrap();
+            total_height = new_child_elem.get_bounding_client_rect().height() as u32;
+            break;
         }
     }
-    bot_hash
+    total_height
+}
+
+
+/// returns the total height of the nodes removed
+fn remove_top_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
+    // 1. REMOVE ALL ITS PARENTS TOO IF IT'S THE ONLY CHILD CURRENTLY
+    // 2. CALCULATE THE HEIGHT ITS USING AND, THEN UPDATE THE PADDING DIV
+    // 3. REMOVE DOM_REF FROM THE NODE(S)
+    let mut child_node = elem;
+    let mut child_elem_ref = child_node.get().elem_ref.unwrap();
+    let mut total_height = child_node.get().height - child_node.get().kind.innate_height();
+    loop {
+        total_height += child_node.get().kind.innate_height();
+        child_node.update(|n| n.elem_ref = None);
+        // log!("REF::: {:?}", child_node.get().elem_ref);
+        // if there is a parent node, we need to check if 
+        // `child_node` is the last node, bc if it is, it means 
+        // we need to remove the parent node too. then we check 
+        // the parent node of the parent node, etc
+        if let Some(parent_node) = child_node.get().parent {
+            let children = parent_node.get().children;
+            let num_children = children.len();
+            let last_child = children[num_children - 1].clone();
+            if child_node.get().hash == last_child.get().hash {
+                // if the child is the last child, it means we 
+                // have to remove the parent node too
+                child_node = parent_node;
+                child_elem_ref = child_node.get().elem_ref.unwrap();
+                continue;
+            // if not the last child, we can now remove the node(s)
+            // (only need to remove the root node)
+            } else { }
+        // if no parent (we're at a root node), just rm node bc 
+        // no parents to check
+        } else { }
+        child_elem_ref.remove();
+        break;
+    }
+    // let mut temp = child_node;
+    // log!("PARENT: {:?}", temp.get().elem_ref);
+    // for child in temp.get().children {
+    //     log!("CHILD: {:?}", child.get().elem_ref);
+    // }
+
+    total_height
+}
+
+pub fn get_top_block_node(nodes: &Vec<RwSignal<PageNode>>) -> RwSignal<PageNode> {
+    let mut top_node = nodes[0];
+    loop {
+        if let Some(first_child) = top_node.get().children.get(0) {
+                // if children are not blocks, this is the final block node
+                if !first_child.get().kind.is_block() { break }
+                top_node = *first_child;
+        } else {
+            break;
+        }
+    }
+    top_node
+}
+pub fn get_bot_block_node(nodes: &Vec<RwSignal<PageNode>>) -> RwSignal<PageNode> {
+    let mut last_idx = nodes.len() - 1;
+    let mut bot_node = nodes[last_idx];
+    loop {
+        let children = bot_node.get().children;
+        if children.is_empty() { break }
+        // if children are not blocks, this is the final block node
+        last_idx = children.len() - 1;
+        let last_child = children[last_idx];
+        if !last_child.get().kind.is_block() { break }
+        bot_node = last_child;
+    }
+    bot_node
+}
+pub fn get_top_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
+    get_top_block_node(nodes).get().hash
+}
+pub fn get_bot_hash(nodes: &Vec<RwSignal<PageNode>>) -> String {
+    get_bot_block_node(nodes).get().hash
 }
 
 pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>, 
@@ -86,10 +340,8 @@ pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
             let mut top_loc = top_loc.clone();
             let mut bot_loc = bot_loc.clone();
 
-            if let PageNodeContents::Children(
-                children_signal
-            ) = node.get().contents {
-
+            let children = node.get().children;
+            if !children.is_empty() {
                 if start_elem_and_may_be_sliced {
                     top_loc.splice(0..1, []); // rm first elem so children in recursion get location in relation to their position
                 // if this is not start elem, we must pass top_loc = &Vec::new() 
@@ -102,7 +354,7 @@ pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
                 } else { bot_loc.clear() }
 
                 let child_nodes = get_nodes_in_view(
-                    cx, children_signal.get(), &top_loc, &bot_loc
+                    cx, children.clone(), &top_loc, &bot_loc
                 );
                 // if this is not sliced (e.g. if top elem and all the 
                 // children slice at 0), we check if it matches the 
@@ -111,14 +363,14 @@ pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
                 // sliced, so keep same signal
 
                 // same ->  not a slice
-                if child_nodes == children_signal.get() {
+                if child_nodes == children {
                     vec.push(*node);
                 // different ->  a slice
                 } else {
+                    // create a new node with different children instead of 
+                    // appending the current node with same children
                     let mut node = node.get();
-                    node.contents = PageNodeContents::Children(
-                        create_rw_signal(cx, child_nodes)
-                    );
+                    node.children = child_nodes;
                     vec.push(create_rw_signal(cx, node));
                 }
             } else {
@@ -136,8 +388,8 @@ pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
     vec
 }
 
-pub fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
-) -> Option<String> {
+pub fn get_next_block_node(hash: &String, page_data: RwSignal<Page>
+) -> Option<RwSignal<PageNode>> {
     let mut location = page_data.get().locations.get()
         .get(hash).unwrap().to_owned();
     // console_log(&format!("location: {:?}", location));
@@ -151,31 +403,21 @@ pub fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
         location[loc_len - 1] += 1;
 
         // * check if this location exists *
-        if let Some(_) = get_hash_from_location(&location, &nodes) {
+        if let Some(_) = get_node_from_location(&location, &nodes) {
             // get top nested child if exists of prev elem, bc that is the 
             // true next item
             // location -> NODE
             let nodes = vec![
                 get_node_from_location(&location, &nodes).unwrap() // unwrap bc we know it exists
             ];
-            let next_hash = get_top_hash(&nodes);
-            return Some(next_hash);
+            let next_node = get_top_block_node(&nodes);
+            return Some(next_node);
         };
 
         // jump one level down
         location.pop().unwrap();
         // if this is true, the input hash is already the last element
-        if location.len() == 0 {
-            console_log("ALREADY LAST");
-
-            // FIXME: eventually i want to get rid of this and calculate height based on `.height` vals in nodes data structure
-            // get height of doc for bottom padding purposes 
-            let page = document().query_selector("[type=page]").unwrap().unwrap();
-            let height = page.get_bounding_client_rect().height() as u32;
-            page_data.get().bot_elem.update(|e| e.pad = height);
-            
-            return None;
-        }
+        if location.len() == 0 { console_log("ALREADY LAST"); return None }
     }
 }
 
@@ -184,8 +426,8 @@ pub fn get_hash_of_next_elem(hash: &String, page_data: RwSignal<Page>
 // HAVE TO CONFIRM THE RWSIGNAL DATATYPE IS VERY SMALL THOUGH TO JUSTIFY ADDING 
 // THEIR REFERENCES TO EACH NODE
 
-pub fn get_hash_of_prev_elem(hash: &String, page_data: RwSignal<Page>
-) -> Option<String> {
+pub fn get_prev_block_node(hash: &String, page_data: RwSignal<Page>
+) -> Option<RwSignal<PageNode>> {
     let mut location = page_data.get().locations.get()
         .get(hash).unwrap().to_owned();
     // console_log(&format!("location: {:?}", location));
@@ -207,8 +449,8 @@ pub fn get_hash_of_prev_elem(hash: &String, page_data: RwSignal<Page>
             let nodes = vec![
                 get_node_from_location(&location, &nodes).unwrap() // unwrap bc we know it exists
             ];
-            let prev_hash = get_bot_hash(&nodes);
-            return Some(prev_hash)
+            let prev_node = get_bot_block_node(&nodes);
+            return Some(prev_node)
         }
 
         // jump one level down
@@ -225,16 +467,12 @@ fn get_node_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
         None => return None,
     };
     for idx in &location[1..] {
-        match node.get().contents {
-            PageNodeContents::Children(children) => {
-                match children.get().get(*idx) {
-                    Some(child) => {
-                        node = child.clone();
-                    },
-                    None => return None,
-                }
+        let children = node.get().children;
+        match children.get(*idx) {
+            Some(child) => {
+                node = child.clone();
             },
-            _ => { panic!("should never get here") },
+            None => return None,
         }
     }
     Some(node)

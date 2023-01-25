@@ -1,11 +1,11 @@
 use leptos::{Scope, RwSignal, create_rw_signal, js_sys::Math};
+use web_sys::Element;
 use std::{hash::{Hash, Hasher}, collections::{HashMap, hash_map::DefaultHasher}};
+use super::{get_top_block_node, get_bot_block_node};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub nodes: RwSignal<Vec<RwSignal<PageNode>>>,
-    pub nodes_in_view:  RwSignal<Vec<RwSignal<PageNode>>>,
-    /// (hash, location, top)
     /// also use this to calculate scroll position
     pub top_elem: RwSignal<EdgeElem>,
     pub bot_elem: RwSignal<EdgeElem>,
@@ -16,16 +16,50 @@ impl Page {
         top_elem: RwSignal<EdgeElem>, bot_elem: RwSignal<EdgeElem>, 
         locations: RwSignal<HashMap<String, Vec<usize>>>
     ) -> RwSignal<Self> {
-        let nodes_in_view = create_rw_signal(cx, Vec::new());
-        create_rw_signal(cx, Self {nodes, nodes_in_view, top_elem, 
-            bot_elem, locations}) 
+        create_rw_signal(cx, Self {nodes, top_elem, bot_elem, locations}) 
+    }
+}
+impl Page {
+    pub fn debug_nodes(&self) -> String {
+        let nodes = &self.nodes.get();
+        let slice = Vec::from([nodes[2]]);
+        let lines = Self::debug_nodes_recursive(&slice);
+        let mut string = String::new();
+        for line in lines {
+            string.push_str(&format!("{}\n", line));
+        }
+        string
+    }
+    pub fn debug_nodes_recursive(nodes: &Vec<RwSignal<PageNode>>) -> Vec<String> {
+        let mut lines = Vec::new();
+        for node in nodes {
+            let node = node.get();
+
+            lines.push("Node<".into());
+            lines.push(format!("    hash: {},", node.hash));
+            let has_elem_ref = match node.elem_ref {
+                Some(_) => true,
+                None => false,
+            };
+            lines.push(format!("    has_elem_ref: {:?},", has_elem_ref));
+            let children = Self::debug_nodes_recursive(&node.children);
+            lines.push(format!("    children: ["));
+            for child in children {
+                lines.push(format!("        {}", child));
+            }
+            lines.push(format!("    ]"));
+            lines.push(">,".into());
+        }
+        lines
     }
 }
 /// the top or bottom element of the view
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EdgeElem {
-    // the hash/id of top element
+    /// the hash/id of top element
     pub hash: String,
+    /// signal to the node
+    pub node_sig: RwSignal<PageNode>,
     // pub location: Vec<usize>, // location not needed bc can use hash to get it from hashset
     /// - if top elem: top = `padding-top` attribute, bot elem: `padding-bot`
     /// - padding is applied to the base node  (e.g. if node is `vec![1, 3, 2]`, 
@@ -37,11 +71,11 @@ pub struct EdgeElem {
     pub inner_edge_y: i32, // FIXME: think i can delete this bc saving not useful ??
 }
 impl EdgeElem {
-    pub fn from(hash: String, pad: u32, inner_edge_y: i32) -> Self {
-        Self {hash, pad, inner_edge_y}
-    }
-    pub fn signal_from(cx: Scope, hash: String, pad: u32, inner_edge_y: i32) -> RwSignal<Self> {
-        create_rw_signal(cx, Self {hash, pad, inner_edge_y})
+    // pub fn from(hash: String, pad: u32, inner_edge_y: i32) -> Self {
+    //     Self {hash, pad, inner_edge_y}
+    // }
+    pub fn signal_from(cx: Scope, hash: String, node_sig: RwSignal<PageNode>, pad: u32, inner_edge_y: i32) -> RwSignal<Self> {
+        create_rw_signal(cx, Self {hash, node_sig, pad, inner_edge_y})
     }
 }
 
@@ -49,7 +83,10 @@ impl EdgeElem {
 pub struct PageNode {
     pub hash: String,
     pub kind: PageNodeType,
-    pub contents: PageNodeContents,
+    pub content: HashMap<String, String>,
+    pub children: Vec<RwSignal<PageNode>>,
+    pub parent: Option<RwSignal<PageNode>>,
+    pub elem_ref: Option<Element>,
     /// height of all elems is tracked so we can have an accurate scroll page 
     /// length without having to render the page down to the bottom
     pub height: u32,
@@ -60,14 +97,16 @@ pub struct PageNode {
 }
 impl PageNode {
     pub fn from(hash: String, kind: PageNodeType, 
-        contents: PageNodeContents, height: u32,
+        content: HashMap<String, String>, children: Vec<RwSignal<PageNode>>, 
+        parent: Option<RwSignal<PageNode>>, height: u32,
     ) -> Self {
-        Self {hash, kind, contents, height}
+        Self {hash, kind, content, children, parent, elem_ref: None, height}
     }
     pub fn signal_from(cx: Scope, hash: String, kind: PageNodeType, 
-        contents: PageNodeContents, height: u32,
+        content: HashMap<String, String>, children: Vec<RwSignal<PageNode>>, 
+        parent: Option<RwSignal<PageNode>>, height: u32,
     ) -> RwSignal<Self> {
-        create_rw_signal(cx, Self {hash, kind, contents, height})
+        create_rw_signal(cx, Self {hash, kind, content, children, parent, elem_ref: None, height})
     }
 }
 // struct RwSignal<T>()
@@ -76,18 +115,6 @@ impl PageNode {
 //         write!(f, "RwSignal PageNode({:?}, {:?})", self.hash, self.kind)
 //     }
 // }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PageNodeContents {
-    Children(RwSignal<Vec<RwSignal<PageNode>>>), Content(RwSignal<HashMap<String, String>>)
-}
-impl PageNodeContents {
-    pub fn signal_from_children(cx: Scope, children: Vec<RwSignal<PageNode>>) -> Self {
-        Self::Children(create_rw_signal(cx, children))
-    }
-    pub fn signal_from_content(cx: Scope, content: HashMap<String, String>) -> Self {
-        Self::Content(create_rw_signal(cx, content))
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PageNodeType {
@@ -139,9 +166,29 @@ impl PageNodeType {
             PageNodeType::RawText => false,
         }
     }
+    /// get the height of the node without any contents (e.g. if the quote 
+    /// block had top/bottom padding, get the sum height of the padding)
+    pub fn innate_height(&self) -> u32 {
+        match *self {
+            // PageNodeType::Quote => 0,
+            // PageNodeType::TextBlock => 0,
+            // PageNodeType::H1 => 0,
+            // PageNodeType::H2 => 0,
+            // PageNodeType::H3 => 0,
+            // PageNodeType::CodeBlock => 0,
+            // PageNodeType::Bold => 0,
+            // PageNodeType::Italic => 0,
+            // PageNodeType::Highlight => 0,
+            // PageNodeType::CodeInline => 0,
+            // PageNodeType::FileLink => 0,
+            // PageNodeType::UrlLink => 0,
+            // PageNodeType::RawText => 0,
+            _ => 0,
+        }
+    }
 }
 
-pub fn add_hashes(nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>, 
+pub fn add_hashes(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>, 
     locations: RwSignal<HashMap<String, Vec<usize>>>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut location = location.clone();
@@ -159,11 +206,9 @@ pub fn add_hashes(nodes: Vec<RwSignal<PageNode>>, location: Vec<usize>,
             nodes[i].update(|e| e.hash = hash.clone())
         }
         // if children present in node, update those too
-        match node.get().contents {
-            PageNodeContents::Children(children) => {
-                add_hashes(children.get(), location, locations)
-            },
-            _ => {},
+        let children = node.get().children;
+        if !children.is_empty()  {
+            add_hashes(&children, location, locations);
         }
     };
 }
@@ -207,4 +252,81 @@ fn rand_alphanumerecimal_hash() -> String {
             }
         }
     }
+}
+
+pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
+    let mut nodes = Vec::new();
+    let raw_text_template = PageNode::from(
+        "".into(), PageNodeType::RawText,
+        HashMap::from([
+            ("text".to_string(), "some text".to_string())
+        ]), Vec::new(), None, 0
+    );
+    let h1_template = PageNode::from(
+        "".into(), PageNodeType::H1,HashMap::new(),
+        Vec::new(), None, 0
+    );
+    let text_block_template = PageNode::from(
+        "".into(), PageNodeType::TextBlock, HashMap::new(),
+        Vec::new(), None, 0
+    );
+    for _ in 0..5 {
+        {
+            let h1_node_sig = create_rw_signal(cx, h1_template.clone());
+            let mut new_child = raw_text_template.clone();
+            new_child.parent = Some(h1_node_sig.clone());
+            h1_node_sig.update(|n| n.children.push(create_rw_signal(cx, new_child)));
+            nodes.push(h1_node_sig);
+        }
+
+        {
+            let parent = create_rw_signal(cx, text_block_template.clone());
+            let child = create_rw_signal(cx, text_block_template.clone());
+            let mut text_child = raw_text_template.clone();
+            text_child.parent = Some(child.clone());
+            child.update(|n| {
+                n.children.push(create_rw_signal(cx, text_child));
+                n.parent = Some(parent.clone());
+            });
+            parent.update(|n| { n.children.push(child) });
+            nodes.push(parent);
+        }
+        {
+            let parent = create_rw_signal(cx, text_block_template.clone());
+            let child_1 = create_rw_signal(cx, text_block_template.clone());
+            let mut text_child_1 = raw_text_template.clone();
+            text_child_1.parent = Some(child_1.clone());
+            child_1.update(|n| {
+                n.children.push(create_rw_signal(cx, text_child_1));
+                n.parent = Some(parent.clone());
+            });
+            let child_2 = create_rw_signal(cx, text_block_template.clone());
+            let mut text_child_2 = raw_text_template.clone();
+            text_child_2.parent = Some(child_2.clone());
+            child_2.update(|n| {
+                n.children.push(create_rw_signal(cx, text_child_2));
+                n.parent = Some(parent.clone());
+            });
+            parent.update(|n| {
+                n.children.push(child_1);
+                n.children.push(child_2);
+            });
+            nodes.push(parent);
+        }
+    }
+    let locations = create_rw_signal(cx, HashMap::new());
+    add_hashes(&nodes, Vec::new(), locations);
+    // ==init top/bot-elem==
+
+    let top_node = get_top_block_node(&nodes);
+    let top_hash = top_node.get().hash;
+    let bot_node = get_bot_block_node(&nodes);
+    let bot_hash = top_node.get().hash;
+
+    Page::signal_from(cx,
+        create_rw_signal(cx, nodes),
+        EdgeElem::signal_from(cx, top_hash, top_node, 0, 0),
+        EdgeElem::signal_from(cx, bot_hash, bot_node, 0, 0),
+        locations,
+    )
 }
