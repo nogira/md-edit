@@ -1,14 +1,16 @@
 use std::collections::HashMap;
-use core::{cmp::max, fmt::Debug};
+use core::{cmp::min, fmt::Debug};
 use leptos::{*, js_sys::{Math, Date}};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
 use web_sys::Element;
 
+use crate::page_data::HashToLocation;
+
 // use src_ui::*;
 use super::{
-    Page, PageNode, PageNodeType, EdgeElem, // add_hashes,
-    init_demo_page_data, update_dom_nodes_in_view,
+    Page, PageNode, PageNodeType, init_demo_page_data,
+    update_dom_nodes_in_view, update_top_padding, update_bot_padding
 };
 
 // TODO: CUSTOMIZABLE MARKDOWN SYNTAX. E.G. IF YOU WANT `/` FOR ITALICS YOU CAN 
@@ -75,8 +77,17 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     let page_data: RwSignal<Page> = init_demo_page_data(cx);
     let page_elem_ref: NodeRef<HtmlElement<Div>> = NodeRef::new(cx);
 
-    let handle_scroll = move |_| {
-        update_dom_nodes_in_view(cx, page_data, page_elem_ref.get().unwrap().unchecked_ref::<web_sys::Element>());
+    // TODO: MAYBE HAVE A SETTING IN THE APP TO INCREASE REFRESH RATE?
+    // let scroll_throttle = store_value(cx, 0.0);
+    let handle_scroll = move |event: web_sys::Event| {
+        // // throttle the number of times this updates per second bc uneccesary
+        // // OTOH, THROTTLING LOOK VISIBLY WORSE AND DOESN'T SEEM TO HAVE ANY EFFECT ON CPU USAGE
+        // let now = Date::now();
+        // if now > scroll_throttle.get() + 100.0 {
+        //     scroll_throttle.set(now);
+        // } else { return }
+        update_dom_nodes_in_view(cx, page_data,
+            page_elem_ref.get().unwrap().unchecked_ref::<web_sys::Element>());
     };
 
     let handle_keypress = move |_| {
@@ -101,31 +112,56 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
                 let top_variable_padding = document().create_element("div").unwrap();
                 top_variable_padding.set_attribute("type", "top-pad").unwrap();
-                top_variable_padding.set_attribute("contenteditable", "false").unwrap();
                 top_variable_padding.set_attribute("style", "height: 0px").unwrap();
                 page_elem.append_child(&top_variable_padding).unwrap();
 
                 // TODO: CHANGE THE INIT TO DELETE NODES FROM DOM RIGHT AFTER 
                 // INIT AND GET HEIGHT SO NOT TOO MANY NODES IN THE PAGE AT 
                 // ONCE THAT WILL LAG TF OUT OF THE APP
-                init_page_nodes(&page_elem, page_data.get().nodes);
-                get_all_node_heights(page_data.get().nodes);
+
+                // TODO: SCROLL DOWN TO THE TOP_ELEM BEFORE I CHANGE THE 
+                // IN-VIEW.PERHAPS INCORPRATE THIS INTO THE init_page_nodes BC 
+                // I DON'T WANT ALL ELEMS ON THE PAGE WHEN IT LOADS, THUS I 
+                // MIGHT HAVE TO INCREMENTALLY LOAD WHILE INCREASING THE 
+                // PADDING AND SCROLLING DOWN UNTIL I HIT THE TOP ELEM
+                //
+                // only get height of leaf blocks
+                //
+                // render lvl1 block 0, then lvl2 block 0, then lvl3 block 0 
+                // (leaf), get height, then unrender & add padding, then render 
+                // lvl3 block 1 (leaf), get height, then unrender & add 
+                // padding, then unrender lvl2 block 0 & add padding, then 
+                // lvl2 block 0, etc
+
+                // let start = Date::now();
+                let top_hash = page_data.get().top_elem.get().hash;
+                init_page_nodes(page_data, &page_elem, &page_elem, 
+                    page_data.get().nodes, &page_data.hash_to_location(&top_hash));
+
+                // NEED TO ADD BOT PAD BEFORE init_page_nodes SO IT'S ACTUALLY ABLE TO ADD THE PADDING ???
 
                 let bot_fixed_padding = document().create_element("div").unwrap();
-                bot_fixed_padding.set_attribute("contenteditable", "false").unwrap();
                 bot_fixed_padding.set_attribute("style", "height: 50px").unwrap();
                 page_elem.append_child(&bot_fixed_padding).unwrap();
 
                 // setting the varible one as last bc easier to get it w/ page_elem.last_element()
                 let bot_variable_padding = document().create_element("div").unwrap();
                 bot_variable_padding.set_attribute("type", "bot-pad").unwrap();
-                bot_variable_padding.set_attribute("contenteditable", "false").unwrap();
                 bot_variable_padding.set_attribute("style", "height: 0px").unwrap();
                 page_elem.append_child(&bot_variable_padding).unwrap();
 
-                // MAYBE ADD OPTION<&ELEMENT> TO PAGENODE TYPE FOR ELEMENTS IN 
-                // VIEW SO DONT HAVE TO QUERY TO GET THE ELEMENT, AND SINCE 
-                // ITS JUST A REF, BUT IDK IF I EVEN NEED TO ACCESS ELEM ???
+                let top_pad = page_data.update_returning_untracked(|p| {
+                    p.top_elem.update_returning_untracked(|e| {
+                        e.pad.clone()
+                    }).unwrap()
+                }).unwrap();
+                let bot_pad = page_data.update_returning_untracked(|p| {
+                    p.bot_elem.update_returning_untracked(|e| {
+                        e.pad.clone()
+                    }).unwrap()
+                }).unwrap();
+                update_top_padding(&page_elem, top_pad);
+                update_bot_padding(&page_elem, bot_pad);
 
                 update_dom_nodes_in_view(cx, page_data, &page_elem);
             })
@@ -143,50 +179,95 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
     }
 }
 
-pub fn get_all_node_heights(node_sig: RwSignal<PageNode>) {
-    let node = node_sig.get();
-    if node.kind.is_block() {
-        let height = node.elem_ref.clone().unwrap()
-            .get_bounding_client_rect().height() as u32;
-        node_sig.update(|n| { n.height = height });
-    }
-    for node_sig in node.children {
-        get_all_node_heights(node_sig);
-    }
-}
-
 pub fn init_page_nodes(
-    mount_elem: &web_sys::Element,
+    page_data: RwSignal<Page>,
+    page_elem: &Element,
+    mount_elem: &Element,
     node_sig: RwSignal<PageNode>,
+    top_loc: &Vec<usize>,
 ) {
-    // NOTE: CAN'T GET HEIGHTS W/ THIS FUNCTION BC YOU WOULD ONLY GET THE 
-    // HEIGHTS OF THE ITEMS MOUNTED TO THE mount_elem OF THE INITIAL CALL. ALL 
-    // THE OTHERS WOULD BE ZERO BC THEY'RE BEING MOUNTED TO ITEMS NOT YET 
-    // MOUNTED TO THE DOM
-    // for node_sig in nodes {
     let node = node_sig.get();
+    let kind = node.kind.clone();
+    let hash = node.hash.clone();
     let children = node.children.clone();
+    let is_block = node.is_block();
+    let is_leaf_block = (&node).is_leaf_block();
     let elem: Element;
-    if node.kind.is_block() {
-        elem = match node.kind {
+    if is_block {
+        elem = match kind {
             PageNodeType::Page => create_page_elem(node),
             PageNodeType::H1 => create_h1_elem(node),
             PageNodeType::TextBlock => create_text_block_elem(node),
             _ => create_unknown_block_elem(node),
         };
         node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
-
     } else {
-        elem = match node.kind {
+        elem = match kind {
             PageNodeType::RawText => create_raw_text_elem(node),
             _ => create_unknown_span_elem(node),
         }
     }
+    // must mount before adding children do the children themselves are mounted
+    mount_elem.append_child(&elem).unwrap();
     // mount children if any
     for child in children {
-        init_page_nodes(&elem, child);
+        init_page_nodes(page_data, page_elem, &elem, child, top_loc);
     }
-    mount_elem.append_child(&elem).unwrap();
+    // must get height of leaf block after adding children so the block has 
+    // content to actually give it height
+    if is_leaf_block {
+        let height = elem.get_bounding_client_rect().height() as u32;
+        node_sig.update(|n| n.height = height);
+    }
+    // need to make sure its a block bc we don't want to remove the content of 
+    // a leaf block before it is able to get the height
+    if is_block && kind != PageNodeType::Page {
+        let mut is_above_top_elem = true;
+        let mut is_below_top_elem = true;
+        let cur_loc = page_data.hash_to_location(&hash);
+        let len = min(top_loc.len(), cur_loc.len());
+        for i in 0..len {
+            let diff = cur_loc[i] as i32 - top_loc[i] as i32;
+            // if so far it is above or same, but this one is below, it is no 
+            // longer above
+            if is_above_top_elem && diff > 0 {
+                is_above_top_elem = false
+            }
+            // if so far it is below or same, but this one is below, it is no 
+            // longer above
+            if is_below_top_elem && diff < 0 {
+                is_below_top_elem = false
+            }
+        }
+        // NOTE THAT SAME IS TREATED AS DO NOT DELETE BC IT WILL EITHER BE THE 
+        // TOP ELEM ITSELF, ARE A BLOCK THAT HOLDS THE TOP ELEM
+        let same = is_above_top_elem && is_below_top_elem;
+        if same { return }
+
+        // NOTE: CAN'T ACTUALLY ADD THE PADDING TO THE DOM HERE BC THE BOT 
+        // PADDING DIV ISN'T ADDED YET
+
+        if is_above_top_elem {
+            // remove and add top padding
+            elem.remove();
+            let height = node_sig.get().height;
+            page_data.update_untracked(|p| {
+                p.top_elem.update_untracked(|e| {
+                    e.pad += height + kind.innate_height();
+                })
+            });
+        } else if is_below_top_elem {
+            // remove and add bot padding
+            elem.remove();
+            let height = node_sig.get().height;
+            page_data.update_untracked(|p| {
+                p.bot_elem.update_untracked(|e| {
+                    e.pad += height + kind.innate_height();
+                })
+            });
+        }
+    }
+    // TODO: CAN USE page_data.update_returning_untracked(f) TO GET STUFF IN SIGNAL WITHOUT HAVING TO COPY THE ENTIRE OBJECT EVERY TIME !!!
 }
 
 // NOTE: `RwSignal` is required to update the `.elem_ref` properties
@@ -196,7 +277,7 @@ pub fn create_elem(
     let node = node_sig.get();
     let children = node.children.clone();
     let elem: Element;
-    if node.kind.is_block() {
+    if node.is_block() {
         elem = match node.kind {
             PageNodeType::H1 => create_h1_elem(node),
             PageNodeType::TextBlock => create_text_block_elem(node),

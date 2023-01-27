@@ -1,6 +1,6 @@
-use leptos::{log, Scope, RwSignal, create_rw_signal, console_log, document};
+use leptos::{log, Scope, RwSignal, create_rw_signal};
 use web_sys::Element;
-use super::{Page, PageNode, create_elem};
+use super::{Page, PageNode, create_elem, HashToLocation};
 
 pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem: &Element) {
 
@@ -68,8 +68,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 // if total is negative (should never be) it is converted to 0 w/ `as u32`
                 new_top_pad = (new_top_pad as f64 - height as f64) as u32;
                 new_top_node = prev_node;
-                page_elem.first_element_child().unwrap().set_attribute(
-                    "style", &format!("height: {}px", new_top_pad)).unwrap();
+                update_top_padding(page_elem, new_top_pad);
             } else {
                 // if already first, we are done
                 top_done = true;
@@ -84,8 +83,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 // set next node to top elem
                 new_top_pad = new_top_pad + height;
                 new_top_node = next_node;
-                page_elem.first_element_child().unwrap().set_attribute(
-                    "style", &format!("height: {}px", new_top_pad)).unwrap();
+                update_top_padding(page_elem, new_top_pad);
             } else {
                 // if already last, we are done
                 top_done = true;
@@ -110,8 +108,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 // if total is negative (should never be) it is converted to 0 w/ `as u32`
                 new_bot_pad = (new_bot_pad as f64 - height as f64) as u32;
                 new_bot_node = next_node;
-                page_elem.last_element_child().unwrap().set_attribute(
-                    "style", &format!("height: {}px", new_bot_pad)).unwrap();
+                update_bot_padding(page_elem, new_bot_pad);
             } else {
                 // if already last, we are done
                 bot_done = true;
@@ -124,8 +121,7 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 // set prev node to bot elem
                 new_bot_pad = new_bot_pad + height;
                 new_bot_node = prev_node;
-                page_elem.last_element_child().unwrap().set_attribute(
-                    "style", &format!("height: {}px", new_bot_pad)).unwrap();
+                update_bot_padding(page_elem, new_bot_pad);
             } else {
                 // if already first, we are done
                 bot_done = true;
@@ -151,6 +147,16 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
         })
     }
 }
+
+pub fn update_top_padding(page_elem: &Element, pad: u32) {
+    page_elem.first_element_child().unwrap().set_attribute(
+        "style", &format!("height: {}px", pad)).unwrap();
+}
+pub fn update_bot_padding(page_elem: &Element, pad: u32) {
+    page_elem.last_element_child().unwrap().set_attribute(
+        "style", &format!("height: {}px", pad)).unwrap();
+}
+
 
 // TODO: tbh it might be better to create a new implementation of insert that uses a slice of the nodes, as we'll already need something like this for e.g. copy and paste
 
@@ -323,7 +329,7 @@ pub fn get_top_block_node(nodes: &Vec<RwSignal<PageNode>>) -> RwSignal<PageNode>
     loop {
         if let Some(first_child) = top_node.get().children.first() {
             // if children are not blocks, this is the final block node
-            if !first_child.get().kind.is_block() { break }
+            if !first_child.get().is_block() { break }
             top_node = *first_child;
         } else {
             break;
@@ -338,7 +344,7 @@ pub fn get_bot_block_node(nodes: &Vec<RwSignal<PageNode>>) -> RwSignal<PageNode>
         if children.is_empty() { break }
         // if children are not blocks, this is the final block node
         let last_child = children.last().unwrap();
-        if !last_child.get().kind.is_block() { break }
+        if !last_child.get().is_block() { break }
         bot_node = *last_child;
     }
     bot_node
@@ -441,8 +447,7 @@ pub fn get_nodes_in_view(cx: Scope, nodes: Vec<RwSignal<PageNode>>,
 
 pub fn get_next_block_node(hash: &String, page_data: RwSignal<Page>
 ) -> Option<RwSignal<PageNode>> {
-    let mut location = page_data.get().locations.get()
-        .get(hash).unwrap().to_owned();
+    let mut location = page_data.hash_to_location(hash);
     // console_log(&format!("location: {:?}", location));
     let nodes = page_data.get().nodes.get().children;
     // first check next child (e.g. input location is [0, 2], so check [0, 3])
@@ -479,9 +484,8 @@ pub fn get_next_block_node(hash: &String, page_data: RwSignal<Page>
 
 pub fn get_prev_block_node(hash: &String, page_data: RwSignal<Page>
 ) -> Option<RwSignal<PageNode>> {
-    let mut location = page_data.get().locations.get()
-        .get(hash).unwrap().to_owned();
-    // console_log(&format!("location: {:?}", location));
+    let mut location = page_data.hash_to_location(hash);
+    // log!("location: {:?}", location);
     let nodes = page_data.get().nodes.get().children;
     // first check prev child (e.g. input location is [0, 3], so check [0, 2])
     // then jump one level down and do same, etc until at base and still no 
@@ -537,10 +541,9 @@ fn get_hash_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
     }
 }
 
-// pub fn get_node_from_hash(hash: &String, page_data: RwSignal<Page>
-// ) -> Option<RwSignal<PageNode>> {
-//     let locations = page_data.get().locations.get();
-//     get_node_from_location(
-//         locations.get(hash).unwrap(), 
-//         &page_data.get().nodes.get())
-// }
+pub fn get_node_from_hash(hash: &String, page_data: RwSignal<Page>
+) -> Option<RwSignal<PageNode>> {
+    get_node_from_location(
+        &(page_data.hash_to_location(hash)),
+        &page_data.get().nodes.get().children)
+}

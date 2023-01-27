@@ -1,8 +1,10 @@
-use leptos::{Scope, RwSignal, create_rw_signal, js_sys::Math};
+use leptos::{Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal};
 use web_sys::Element;
-use std::{hash::{Hash, Hasher}, collections::{HashMap, hash_map::DefaultHasher}};
+use std::{hash::{Hash, Hasher, self}, collections::{HashMap, hash_map::DefaultHasher}};
 use super::{get_top_block_node, get_bot_block_node};
 
+// tried doing `struct PageSignal(RwSignal<Page>)` wrapper but it introduced 
+// waaaaaaaaay too much complexity that i cbf solving
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub nodes: RwSignal<PageNode>,
@@ -10,6 +12,18 @@ pub struct Page {
     pub top_elem: RwSignal<EdgeElem>,
     pub bot_elem: RwSignal<EdgeElem>,
     pub locations: RwSignal<HashMap<String, Vec<usize>>>,
+}
+pub trait HashToLocation {
+    fn hash_to_location(&self, hash: &String) -> Vec<usize>;
+}
+impl HashToLocation for RwSignal<Page> {
+    fn hash_to_location(&self, hash: &String) -> Vec<usize> {
+        self.update_returning_untracked(|p| {
+            p.locations.update_returning_untracked(|ls| {
+                ls.get(hash).unwrap().clone()
+            }).unwrap()
+        }).unwrap()
+    }
 }
 impl Page {
     pub fn signal_from(cx: Scope, nodes: RwSignal<PageNode>, 
@@ -108,6 +122,12 @@ impl PageNode {
     ) -> RwSignal<Self> {
         create_rw_signal(cx, Self {hash, kind, content, children, parent, elem_ref: None, height})
     }
+    pub fn is_block(&self) -> bool {
+        self.kind.is_block()
+    }
+    pub fn is_leaf_block(&self) -> bool {
+        self.kind.is_block() && !self.children[0].get().is_block()
+    }
 }
 // struct RwSignal<T>()
 // impl Debug for RwSignal<PageNode> {
@@ -203,7 +223,11 @@ pub fn add_hashes(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>,
         if node.get().hash == "".to_string() {
             let mut hash = rand_alphanumerecimal_hash();
             loop {
-                if !locations.get().contains_key(&hash) { break }
+                let hash_in_locations = locations
+                    .update_returning_untracked(|ls| {
+                        !ls.contains_key(&hash)
+                    }).unwrap();
+                if hash_in_locations { break }
                 hash = rand_alphanumerecimal_hash();
             }
             locations.update(|h| {
@@ -335,17 +359,19 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
     });
     let locations = create_rw_signal(cx, HashMap::new());
     add_hashes(&nodes, Vec::new(), locations);
-    // ==init top/bot-elem==
+
+    // BC SCREEN WIDTH IS VARIABLE, SET TOP AND BOTTOM ELEM TO THE TOP_ELEM, 
+    // THEN TRIGGER THE IN-VIEW THING TO RENDER TO BOTTOM OF VIEW
 
     let top_node = get_top_block_node(&nodes);
     let top_hash = top_node.get().hash;
-    let bot_node = get_bot_block_node(&nodes);
-    let bot_hash = top_node.get().hash;
+    // let bot_node = get_bot_block_node(&nodes);
+    // let bot_hash = top_node.get().hash;
 
     Page::signal_from(cx,
         page,
+        EdgeElem::signal_from(cx, top_hash.clone(), top_node.clone(), 0, 0),
         EdgeElem::signal_from(cx, top_hash, top_node, 0, 0),
-        EdgeElem::signal_from(cx, bot_hash, bot_node, 0, 0),
         locations,
     )
 }
