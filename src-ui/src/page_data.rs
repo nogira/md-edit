@@ -1,4 +1,4 @@
-use leptos::{Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal};
+use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal};
 use web_sys::Element;
 use std::{hash::{Hash, Hasher, self}, collections::{HashMap, hash_map::DefaultHasher}};
 use super::{get_top_block_node, get_bot_block_node};
@@ -304,10 +304,11 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
         "".into(), PageNodeType::TextBlock, HashMap::new(),
         Vec::new(), None, 0
     );
-    for _ in 0..5 {
+    for i in 0..5 {
         {
             let h1_node_sig = create_rw_signal(cx, h1_template.clone());
             let mut new_child = raw_text_template.clone();
+            new_child.content.get_mut("text").unwrap().push_str(&format!(" {}", i));
             new_child.parent = Some(h1_node_sig.clone());
             h1_node_sig.update(|n| {
                 n.children.push(create_rw_signal(cx, new_child));
@@ -320,6 +321,7 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
             let parent = create_rw_signal(cx, text_block_template.clone());
             let child = create_rw_signal(cx, text_block_template.clone());
             let mut text_child = raw_text_template.clone();
+            text_child.content.get_mut("text").unwrap().push_str(&format!(" {}", i));
             text_child.parent = Some(child.clone());
             child.update(|n| {
                 n.children.push(create_rw_signal(cx, text_child));
@@ -335,6 +337,7 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
             let parent = create_rw_signal(cx, text_block_template.clone());
             let child_1 = create_rw_signal(cx, text_block_template.clone());
             let mut text_child_1 = raw_text_template.clone();
+            text_child_1.content.get_mut("text").unwrap().push_str(&format!(" {}", i));
             text_child_1.parent = Some(child_1.clone());
             child_1.update(|n| {
                 n.children.push(create_rw_signal(cx, text_child_1));
@@ -363,10 +366,14 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
     // BC SCREEN WIDTH IS VARIABLE, SET TOP AND BOTTOM ELEM TO THE TOP_ELEM, 
     // THEN TRIGGER THE IN-VIEW THING TO RENDER TO BOTTOM OF VIEW
 
-    let top_node = get_top_block_node(&nodes);
-    let top_hash = top_node.get().hash;
+    // let top_node = get_top_block_node(&nodes);
+    // let top_hash = top_node.get().hash;
+    // log!("{}", top_hash);
     // let bot_node = get_bot_block_node(&nodes);
     // let bot_hash = top_node.get().hash;
+    // get lower top_node to test scroll to top_node on init
+    let top_node = nodes[3];
+    let top_hash = top_node.get().hash;
 
     Page::signal_from(cx,
         page,

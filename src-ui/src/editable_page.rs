@@ -133,12 +133,9 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 // padding, then unrender lvl2 block 0 & add padding, then 
                 // lvl2 block 0, etc
 
-                // let start = Date::now();
                 let top_hash = page_data.get().top_elem.get().hash;
                 init_page_nodes(page_data, &page_elem, &page_elem, 
                     page_data.get().nodes, &page_data.hash_to_location(&top_hash));
-
-                // NEED TO ADD BOT PAD BEFORE init_page_nodes SO IT'S ACTUALLY ABLE TO ADD THE PADDING ???
 
                 let bot_fixed_padding = document().create_element("div").unwrap();
                 bot_fixed_padding.set_attribute("style", "height: 50px").unwrap();
@@ -250,6 +247,7 @@ pub fn init_page_nodes(
         if is_above_top_elem {
             // remove and add top padding
             elem.remove();
+            node_sig.update(|n| { n.elem_ref = None });
             let height = node_sig.get().height;
             page_data.update_untracked(|p| {
                 p.top_elem.update_untracked(|e| {
@@ -259,6 +257,7 @@ pub fn init_page_nodes(
         } else if is_below_top_elem {
             // remove and add bot padding
             elem.remove();
+            node_sig.update(|n| { n.elem_ref = None });
             let height = node_sig.get().height;
             page_data.update_untracked(|p| {
                 p.bot_elem.update_untracked(|e| {
