@@ -5,11 +5,10 @@ use serde::Serialize;
 use tauri_sys::{event, tauri};
 use web_sys::Element;
 
-use crate::page_data::HashToLocation;
-
 // use src_ui::*;
 use super::{
-    Page, PageNode, PageNodeType, init_demo_page_data,
+    Page, PageNode, PageNodeType, init_demo_page_data, IsFirstChild, IsBlock,
+    HashToLocation, HashToNode,
     update_dom_nodes_in_view, update_top_padding, update_bot_padding
 };
 
@@ -58,18 +57,20 @@ fn update_dims(start_elem: Vec<usize>) {
 //         .unwrap()
 // }
 
-// pub enum Key {
-//     Return, Delete, ForwardSlash
-// }
-// impl Key {
-//     fn key_code(&self) -> u32 {
-//         match self {
-//             Key::Return => 13,
-//             Key::Delete => 8,
-//             Key::ForwardSlash => 191,
-//         }
-//     }
-// }
+pub enum Key {
+    Return, Delete, ForwardSlash
+}
+impl Key {
+    fn key_code(&self) -> u32 {
+        match self {
+            Key::Return => 13,
+            Key::Delete => 8,
+            Key::ForwardSlash => 191,
+        }
+    }
+}
+
+// TODO: CAN USE page_data.update_returning_untracked(f) TO GET STUFF IN SIGNAL WITHOUT HAVING TO COPY THE ENTIRE OBJECT EVERY TIME !!!
 
 #[component]
 pub fn EditablePage(cx: Scope) -> impl IntoView {
@@ -86,17 +87,134 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // if now > scroll_throttle.get() + 100.0 {
         //     scroll_throttle.set(now);
         // } else { return }
-        update_dom_nodes_in_view(cx, page_data,
-            page_elem_ref.get().unwrap().unchecked_ref::<web_sys::Element>());
+        if let Some(page_elem) = &page_elem_ref.get() {
+            let page_elem = page_elem.unchecked_ref::<web_sys::Element>();
+            update_dom_nodes_in_view(cx, page_data, &page_elem.clone());
+
+            // TODO: FINISH THIS
+            // let page_top = (&page_elem).get_bounding_client_rect().top();
+            // let top_elem_bot = page_data.update_returning_untracked(|p| {
+            //     p.top_elem.get_untracked().node_sig.get_untracked().elem_ref.unwrap()
+            //         .get_bounding_client_rect().bottom()
+            // }).unwrap();
+            // log!("{}", top_elem_bot - page_top);
+        };
     };
 
-    let handle_keypress = move |_| {
+    let handle_keypress = move |event: web_sys::KeyboardEvent| {
+
+        log!("KEY: {:?}", event.key_code());
+
+        // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
+        // EVERYTHING ELSE IS ALREADY FINE
+        // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
+
+        let selection = document().get_selection().unwrap().unwrap();
+        let key_code = event.key_code();
+        console_log(&format!("KEY: {:?}", key_code));
+        // first check selection type bc if no selection, and not a special 
+        // char, we don't need to do anything. if there is a selection though 
+        // be need to handle the deletion
+        let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
+
+        // SELECTION NODES ARE TEXT NODES
+        let start_node = selection.anchor_node().unwrap();
+        let start_offset = selection.anchor_offset();
+        // parent span
+        let start_span_elem = start_node.parent_element().unwrap();
+        let hash = start_span_elem.get_attribute("hash").unwrap();
+        let start_span_node = page_data.hash_to_node(&hash).unwrap();
+
+        // FIXME: only need to prevent default if the delete if the first 
+        // char in a block
+
+        if sel_type == "Caret"  {
+            // DELETE key pressed
+            if event.key_code() == Key::Delete.key_code() {
+                if start_offset == 0 {
+                    let mut child_sig = start_span_node;
+                    loop {
+                        let parent_sig = child_sig.get().parent.unwrap();
+                        if !parent_sig.is_first_child(&child_sig) { break }
+                        if !parent_sig.is_block() {
+                            child_sig = parent_sig;
+                            continue;
+                        }
+                        let parent = parent_sig.get();
+                        if parent.kind == PageNodeType::TextBlock { 
+                            // TODO: JOIN TO BLOCK ABOVE IF PRESENT AND NO BLOCK CONTAINING THE TEXT BLOCK
+                            break;
+                        }
+                        parent_sig.update_untracked(|p| {
+                            p.kind = PageNodeType::TextBlock;
+                        });
+                        parent.elem_ref.unwrap().set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
+                        event.prevent_default();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // let keys = [
+        //     Key::Return.key_code(),
+        //     Key::Delete.key_code(),
+        //     Key::ForwardSlash.key_code(),
+        // ];
+
+        // if &sel_type == "Range" || keys.contains(&key_code) {
+        //     let nodes = page_data.get();
+
+            // FIXME: shit maybe i need hashing after-all w/ the hashes also 
+            // stored in a signal along with their paths. looks like it will 
+            // be very expensive to find the position of each child w/o it (if even possible)
+
+
+
+            // if &sel_type == "Range" {
+
+            // } else {
+
+            // }
+
+            // // RETURN key pressed
+            // if event.key_code() == 13 {
+            //     event.prevent_default();
+            //     let parent = selection.anchor_node().unwrap().parent_element().unwrap();
+            //     console_log(&format!("...: {:?}", parent));
+            //     // console_log(&format!("{:?}", selection.anchor_node().unwrap().parent_element().unwrap().get_attribute("block").unwrap()));
+
+            // // DELETE key pressed
+            // } else if event.key_code() == 8 {
+
+            //     event.prevent_default();
+
+
+            //     // TODO: add capital letters to hash 
+
+            //     let len = start_node.to_string().length();
+            //     log!("SEL TYPE: {:?}", len);
+                
+            //     let kind = start_span_elem.get_attribute("type").unwrap();
+            //     log!("TYPE: {:?}", kind);
+            //     // step 1, check if block or span, bc need to get to parent block
+            //     // if selection is at start of block, 
+            //     match kind.as_str() {
+            //         // span
+            //         "span" => {},
+            //         // block
+            //         _ => {},
+            //     }
+            // }
+        // }
 
     };
 
     // TODO: CAN CONVERT MOST SIGNALS TO STORES OR BOXES OR SOMETHING THAT IS 
     // JUST A REF BC DONT THINK I NEED A SIGNAL FOR ANYTHING. EVENT THE 
     // CREATE_EFFECT USES A NODEREF, NOT A SIGNAL
+    // nvm, store is just a wrapper around a signal. perhaps there is a cargo 
+    // lib w/ better ref implementation tho ??
 
     // init render
     create_effect(cx, move |_| {
@@ -106,8 +224,8 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 // TODO: use queryselector ON THE PAGE ELEM SO FASTER
                 // page_elem.query_selector(selectors).unwrap().unwrap();
 
-                log!("{}", "test");
-                log!("{}", std::mem::size_of_val(&page_elem));
+                // log!("{}", "test");
+                // log!("{}", std::mem::size_of_val(&page_elem));
                 // log!("{}", std::mem::size_of_val(page_elem));
 
                 let top_variable_padding = document().create_element("div").unwrap();
@@ -141,7 +259,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 bot_fixed_padding.set_attribute("style", "height: 50px").unwrap();
                 page_elem.append_child(&bot_fixed_padding).unwrap();
 
-                // setting the varible one as last bc easier to get it w/ page_elem.last_element()
+                // setting the variable one as last bc easier to get it w/ page_elem.last_element()
                 let bot_variable_padding = document().create_element("div").unwrap();
                 bot_variable_padding.set_attribute("type", "bot-pad").unwrap();
                 bot_variable_padding.set_attribute("style", "height: 0px").unwrap();
@@ -160,6 +278,24 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 update_top_padding(&page_elem, top_pad);
                 update_bot_padding(&page_elem, bot_pad);
 
+                // SCROLL
+                // let scroll_pos = page_data.update_returning_untracked(|p| {
+                //     p.scroll_pos
+                // }).unwrap();
+                // page_elem.scroll_by_with_x_and_y(0.0, scroll_pos as f64);
+
+                // TODO: SAVE SCROLL POSITION ON SCROLL
+                // hmm i think i need to adjust above scroll bc it doesn't 
+                // account for screen width
+                // i should track bottom edge of top_elem relative to top  as a 
+                // percentage of top_elem height
+                // scroll edge so i can first move down to the elem, then do a 
+                // slight adjustment. this will get it close enough
+                let top_elem = page_data.update_returning_untracked(|p| {
+                    p.top_elem.get_untracked().node_sig.get_untracked().elem_ref.unwrap()
+                }).unwrap();
+                top_elem.scroll_into_view();
+
                 update_dom_nodes_in_view(cx, page_data, &page_elem);
             })
         }
@@ -167,7 +303,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     view! {cx,
         <div
-        style="overflow-y: auto; height: 150px;"
+        style="overflow-y: auto; height: 150px; width: 200px; margin: auto;"
         type="scroll-window"
         on:scroll=handle_scroll
         on:keydown=handle_keypress
@@ -193,7 +329,9 @@ pub fn init_page_nodes(
     if is_block {
         elem = match kind {
             PageNodeType::Page => create_page_elem(node),
+            PageNodeType::Quote => create_quote_elem(node),
             PageNodeType::H1 => create_h1_elem(node),
+            PageNodeType::Dot => create_dot_elem(node),
             PageNodeType::TextBlock => create_text_block_elem(node),
             _ => create_unknown_block_elem(node),
         };
@@ -266,10 +404,10 @@ pub fn init_page_nodes(
             });
         }
     }
-    // TODO: CAN USE page_data.update_returning_untracked(f) TO GET STUFF IN SIGNAL WITHOUT HAVING TO COPY THE ENTIRE OBJECT EVERY TIME !!!
 }
 
 // NOTE: `RwSignal` is required to update the `.elem_ref` properties
+/// create elem and add elem_ref to node
 pub fn create_elem(
     node_sig: RwSignal<PageNode>,
 ) -> Element {
@@ -278,7 +416,9 @@ pub fn create_elem(
     let elem: Element;
     if node.is_block() {
         elem = match node.kind {
+            PageNodeType::Quote => create_quote_elem(node),
             PageNodeType::H1 => create_h1_elem(node),
+            PageNodeType::Dot => create_dot_elem(node),
             PageNodeType::TextBlock => create_text_block_elem(node),
             _ => create_unknown_block_elem(node),
         };
@@ -308,9 +448,31 @@ fn create_page_elem(node: PageNode) -> Element {
     elem
 }
 
+fn create_quote_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("type", PageNodeType::Quote.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem
+}
+
 fn create_h1_elem(node: PageNode) -> Element {
     let elem = document().create_element("div").unwrap();
     elem.set_attribute("type", PageNodeType::H1.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem
+}
+
+fn create_dot_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("type", PageNodeType::Dot.value()).unwrap();
+    elem.set_attribute("hash", &node.hash).unwrap();
+    elem
+}
+
+
+fn create_num_elem(node: PageNode) -> Element {
+    let elem = document().create_element("div").unwrap();
+    elem.set_attribute("type", PageNodeType::Num.value()).unwrap();
     elem.set_attribute("hash", &node.hash).unwrap();
     elem
 }

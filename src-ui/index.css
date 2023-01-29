@@ -4,6 +4,13 @@
     font-size: 250%;
 }
 
+[type=d]::before {
+    content: '\2022 ';
+    position: relative;
+    padding-right: 5px;
+    top: 1px;
+}
+
 [type=b] { 
     font-weight: bold;
 }
@@ -21,3 +28,13 @@
     vertical-align: sub;
     font-size: smaller;
 }
+/* this prob not best idea bc seems not able to have multiple lists on same lvl
+div {
+    counter-reset: list-number;
+}
+div > div {
+    counter-increment: list-number;
+}
+div div[type=tb]:before :not(div) {
+    content: counter(list-number);
+} */

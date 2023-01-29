@@ -515,7 +515,7 @@ pub fn get_prev_block_node(hash: &String, page_data: RwSignal<Page>
     }
 }
 
-fn get_node_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
+pub fn get_node_from_location(location: &Vec<usize>, nodes: &Vec<RwSignal<PageNode>>
 ) -> Option<RwSignal<PageNode>> {
     let mut node = match nodes.get(location[0]) {
         Some(node) => node.clone(),
