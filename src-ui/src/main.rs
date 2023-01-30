@@ -14,7 +14,7 @@ pub fn main() {
     console_error_panic_hook::set_once();
     mount_to_body(|cx| view! { cx, 
         <div style="position: fixed; height: 100vh; width: 100vw">
-            <li>"test"</li>
+            
             <EditablePage />
         </div>
     })

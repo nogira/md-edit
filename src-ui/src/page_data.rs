@@ -173,6 +173,19 @@ impl IsFirstChild<RwSignal<PageNode>> for RwSignal<PageNode> {
         }).unwrap()
     }
 }
+pub trait ChangeBlockKind {
+    fn change_block_kind(&self, new_kind: PageNodeType);
+}
+impl ChangeBlockKind for RwSignal<PageNode> {
+    fn change_block_kind(&self, new_kind: PageNodeType) {
+        self.update_untracked(|p| {
+            p.kind = new_kind.clone();
+            if let Some(elem_ref) =  p.elem_ref.clone() {
+                elem_ref.set_attribute("type", new_kind.value()).unwrap();
+            }
+        });
+    }
+}
 // struct RwSignal<T>()
 // impl Debug for RwSignal<PageNode> {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -402,7 +415,7 @@ pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
             nodes.push(parent);
         }
         {
-            let parent = create_rw_signal(cx, text_block_template.clone());
+            let parent = create_rw_signal(cx, quote_block_template.clone());
             let child_1 = create_rw_signal(cx, text_block_template.clone());
             let mut text_child_1 = raw_text_template.clone();
             text_child_1.content.get_mut("text").unwrap().push_str(&format!(" {}", i));

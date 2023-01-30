@@ -1,12 +1,19 @@
 
+[type=q] {
+    border-left: 3px solid lightblue;
+    padding-left: 7px;
+    margin-left: 6px;
+}
+
 [type=h1] {
-    color: blueviolet;
     font-size: 250%;
 }
 
 [type=d]::before {
-    content: '\2022 ';
+    color: gray;
+    content: '\2022';
     position: relative;
+    padding-left: 5px;
     padding-right: 5px;
     top: 1px;
 }

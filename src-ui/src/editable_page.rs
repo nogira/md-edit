@@ -3,7 +3,9 @@ use core::{cmp::min, fmt::Debug};
 use leptos::{*, js_sys::{Math, Date}};
 use serde::Serialize;
 use tauri_sys::{event, tauri};
-use web_sys::Element;
+use web_sys::{Element, Node, CharacterData};
+
+use crate::page_data::ChangeBlockKind;
 
 // use src_ui::*;
 use super::{
@@ -58,7 +60,7 @@ fn update_dims(start_elem: Vec<usize>) {
 // }
 
 pub enum Key {
-    Return, Delete, ForwardSlash
+    Return, Delete, ForwardSlash, Three, Space
 }
 impl Key {
     fn key_code(&self) -> u32 {
@@ -66,6 +68,8 @@ impl Key {
             Key::Return => 13,
             Key::Delete => 8,
             Key::ForwardSlash => 191,
+            Key::Three => 51,
+            Key::Space => 32,
         }
     }
 }
@@ -105,6 +109,9 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
         log!("KEY: {:?}", event.key_code());
 
+        // TODO: i need to start thinking about recording edit events to enable undo
+        // check how other programs handle undo
+
         // TODO: ALL I NEED TO HANDLE IS DELETE RETURN AND /
         // EVERYTHING ELSE IS ALREADY FINE
         // FIXME: WAIT BUT DATA NEEDS TO UPDATE AS WELL AS THE DOM SO ALL MUST BE UPDATED THROUGH THIS FUNCTION
@@ -118,7 +125,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         let sel_type = selection.type_(); // "Range" or "Caret" (caret is 0 range)
 
         // SELECTION NODES ARE TEXT NODES
-        let start_node = selection.anchor_node().unwrap();
+        let start_node: CharacterData = selection.anchor_node().unwrap().dyn_into().unwrap();
         let start_offset = selection.anchor_offset();
         // parent span
         let start_span_elem = start_node.parent_element().unwrap();
@@ -145,15 +152,61 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                             // TODO: JOIN TO BLOCK ABOVE IF PRESENT AND NO BLOCK CONTAINING THE TEXT BLOCK
                             break;
                         }
-                        parent_sig.update_untracked(|p| {
-                            p.kind = PageNodeType::TextBlock;
-                        });
-                        parent.elem_ref.unwrap().set_attribute("type", PageNodeType::TextBlock.value()).unwrap();
+                        parent_sig.change_block_kind(PageNodeType::TextBlock);
                         event.prevent_default();
                         return;
                     }
                 }
             }
+            // SPACE key pressed
+            if event.key_code() == Key::Space.key_code() {
+                let txt_node_str = start_node.text_content().unwrap();
+                if start_offset == 1 && &txt_node_str[0..1] == "#" {
+                    let mut child_sig = start_span_node;
+                    loop {
+                        let parent_sig = child_sig.get().parent.unwrap();
+                        if !parent_sig.is_first_child(&child_sig) { break }
+                        if !parent_sig.is_block() {
+                            child_sig = parent_sig;
+                            continue;
+                        }
+                        let parent = parent_sig.get();
+                        if parent.kind != PageNodeType::TextBlock { break }
+                        parent_sig.change_block_kind(PageNodeType::H1);
+                        start_span_node.update_untracked(|e| {
+                            e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                            start_node.delete_data(0, 1).unwrap();
+                        });
+                        event.prevent_default();
+                        return;
+                    }
+                } else if start_offset == 1 && &txt_node_str[0..1] == "-" {
+                    let mut child_sig = start_span_node;
+                    loop {
+                        let parent_sig = child_sig.get().parent.unwrap();
+                        if !parent_sig.is_first_child(&child_sig) { break }
+                        if !parent_sig.is_block() {
+                            child_sig = parent_sig;
+                            continue;
+                        }
+                        let parent = parent_sig.get();
+                        if parent.kind != PageNodeType::TextBlock { break }
+                        parent_sig.change_block_kind(PageNodeType::Dot);
+                        start_span_node.update_untracked(|e| {
+                            e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                            start_node.delete_data(0, 1).unwrap();
+                        });
+                        event.prevent_default();
+                        return;
+                    }
+                }
+            }
+            // if event.get_modifier_state("Shift") {
+            //     // # key pressed (shift-3)
+            //     if event.key_code() == Key::Three.key_code() {
+            //         log!("#")
+            //     }
+            // }
         }
 
         // let keys = [
