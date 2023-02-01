@@ -1,7 +1,9 @@
-use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal, ev::scroll};
-use web_sys::Element;
+use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal, UntrackedGettableSignal, ev::scroll, JsCast, document};
+use web_sys::{Node, Element};
 use std::{hash::{Hash, Hasher, self}, collections::{HashMap, hash_map::DefaultHasher}};
-use super::{get_top_block_node, get_bot_block_node, get_node_from_location};
+use crate::editable_page::CreateElem;
+
+use super::{get_top_block_node, get_bot_block_node, get_node_from_location, ElemIsInView};
 
 // tried doing `struct PageSignal(RwSignal<Page>)` wrapper but it introduced 
 // waaaaaaaaay too much complexity that i cbf solving
@@ -12,6 +14,48 @@ pub struct Page {
     pub top_elem: RwSignal<EdgeElem>,
     pub bot_elem: RwSignal<EdgeElem>,
     pub locations: RwSignal<HashMap<String, Vec<usize>>>,
+    // pub undo_hist: RwSignal<Vec<UndoEvent>>,
+}
+// /// this also covers redo evvents
+// struct UndoEvent {
+//     start_pos: Vec<usize>,
+//     end_pos: Vec<usize>,
+//     kind: UndoEventKind,
+//     content: String, // this might need to be `PageNode`
+// }
+// enum UndoEventKind {
+//     Insert, Remove
+// }
+pub trait InsertHash {
+    fn insert_hash(&self, hash: String, location: Vec<usize>);
+}
+impl InsertHash for RwSignal<HashMap<String, Vec<usize>>> {
+    /// add/update hash
+    fn insert_hash(&self, hash: String, location: Vec<usize>) {
+        self.update_untracked(|ls| {
+            ls.insert(hash, location);
+        })
+    }
+}
+pub trait RemoveHash {
+    fn remove_hash(&self, hash: &String);
+}
+impl RemoveHash for RwSignal<HashMap<String, Vec<usize>>> {
+    fn remove_hash(&self, hash: &String) {
+        self.update_untracked(|ls| {
+            ls.remove(hash);
+        })
+    }
+}
+pub trait ContainsHash {
+    fn contains_hash(&self, hash: &String) -> bool;
+}
+impl ContainsHash for RwSignal<HashMap<String, Vec<usize>>> {
+    fn contains_hash(&self, hash: &String) -> bool {
+        self.update_returning_untracked(|ls| {
+            ls.contains_key(hash)
+        }).unwrap()
+    }
 }
 pub trait HashToLocation {
     fn hash_to_location(&self, hash: &String) -> Vec<usize>;
@@ -22,6 +66,13 @@ impl HashToLocation for RwSignal<Page> {
             p.locations.update_returning_untracked(|ls| {
                 ls.get(hash).unwrap().clone()
             }).unwrap()
+        }).unwrap()
+    }
+}
+impl HashToLocation for RwSignal<HashMap<String, Vec<usize>>> {
+    fn hash_to_location(&self, hash: &String) -> Vec<usize> {
+        self.update_returning_untracked(|ls| {
+            ls.get(hash).unwrap().clone()
         }).unwrap()
     }
 }
@@ -173,6 +224,75 @@ impl IsFirstChild<RwSignal<PageNode>> for RwSignal<PageNode> {
         }).unwrap()
     }
 }
+pub trait IsLastChild<T> {
+    fn is_last_child(&self, child: &T) -> bool;
+}
+impl IsLastChild<RwSignal<PageNode>> for RwSignal<PageNode> {
+    fn is_last_child(&self, child: &RwSignal<PageNode>) -> bool {
+        self.update_returning_untracked(|p| {
+            let last_child = p.children.last().unwrap().clone();
+            &last_child == child
+        }).unwrap()
+    }
+}
+pub trait PrevChild<T> {
+    fn prev_child(&self, child: &T) -> Option<RwSignal<PageNode>>;
+}
+impl PrevChild<RwSignal<PageNode>> for RwSignal<PageNode> {
+    fn prev_child(&self, child: &RwSignal<PageNode>) -> Option<RwSignal<PageNode>> {
+        self.update_returning_untracked(|p| {
+            let len_children = p.children.len();
+            for i in 0..len_children {
+                if &p.children[i] == child {
+                    if i == 0 { return None }
+                    return match p.children.get(i-1) {
+                        Some(child) => Some(child.clone()),
+                        None => None,
+                    };
+                }
+            }
+            return None
+        }).unwrap()
+    }
+}
+pub trait NextChild<T> {
+    fn next_child(&self, child: &T) -> Option<RwSignal<PageNode>>;
+}
+impl NextChild<RwSignal<PageNode>> for RwSignal<PageNode> {
+    fn next_child(&self, child: &RwSignal<PageNode>) -> Option<RwSignal<PageNode>> {
+        self.update_returning_untracked(|p| {
+            let len_children = p.children.len();
+            for i in 0..len_children {
+                if &p.children[i] == child {
+                    return match p.children.get(i+1) {
+                        Some(child) => Some(child.clone()),
+                        None => None,
+                    };
+                }
+            }
+            return None
+        }).unwrap()
+    }
+}
+pub trait RemoveChild<T> {
+    fn remove_child(&self, child: &T);
+}
+impl RemoveChild<RwSignal<PageNode>> for RwSignal<PageNode> {
+    /// remove child (page node & DOM elem)
+    fn remove_child(&self, node: &RwSignal<PageNode>) {
+        self.update_untracked(|n| {
+            for (i, child) in n.children.clone().iter().enumerate() {
+                if child == node {
+                    n.children.remove(i);
+                    if let Some(elem) = child.update_returning_untracked(|n| n.elem_ref.clone()).unwrap() {
+                        elem.remove();
+                    }
+                    return
+                }
+            }
+        });
+    }
+}
 pub trait ChangeBlockKind {
     fn change_block_kind(&self, new_kind: PageNodeType);
 }
@@ -186,6 +306,124 @@ impl ChangeBlockKind for RwSignal<PageNode> {
         });
     }
 }
+
+pub trait InsertText {
+    fn insert_text(&self, from: RwSignal<PageNode>);
+}
+impl InsertText for RwSignal<PageNode> {
+    fn insert_text(&self, from: RwSignal<PageNode>) {
+        // self.update_untracked(|p| {
+        //     p.kind = new_kind.clone();
+        //     if let Some(elem_ref) =  p.elem_ref.clone() {
+        //         elem_ref.set_attribute("type", new_kind.value()).unwrap();
+        //     }
+        // });
+    }
+}
+pub trait InsertNodes {
+    fn insert_nodes(&self, nodes: &Vec<RwSignal<PageNode>>, before: Option<&RwSignal<PageNode>>);
+}
+impl InsertNodes for RwSignal<PageNode> {
+    /// `before` is the node to insert before
+    fn insert_nodes(&self, nodes: &Vec<RwSignal<PageNode>>, before: Option<&RwSignal<PageNode>>) {
+        self.update_untracked(|parent| {
+            let parent_elem = parent.elem_ref.clone().unwrap();
+            let children = parent.children.clone();
+            // if there is a before node, insert before, else insert as last child
+            if let Some(before_sig) = before {
+                // find idx of elem
+                let mut idx = None;
+                // children.ind
+                for (i, node_sig) in children.iter().enumerate() {
+                    if node_sig == before_sig {
+                        idx = Some(i);
+                        break;
+                    }
+                }
+                if idx.is_none() { panic!("failed to insert nodes bc the node to insert before is not present in the parent block") }
+                let idx = idx.unwrap();
+
+                // BEFORE ELEM MIGHT NOT BE PRESENT ON THE SCREEN, BUT SOME OF 
+                // THE ELEMENTS ON THE SCREEN MIGHT BE
+                // i guess this can be handled by skipping element insertion 
+                // if elem not present, but then, then immediately just 
+                // re-rendering the page
+                let optional_before_elem = match before_sig.get().elem_ref {
+                    Some(elem) => Some(elem.dyn_into::<Node>().unwrap()),
+                    None => None,
+                };
+
+                // must check EACH elem is in view to then remove if not bc 
+                // even if you track the first elem that is not in view, the 
+                // first elems might not be in view, but the later ones might be
+                for (i, node_sig) in nodes.iter().enumerate() {
+                    // if the node we're moving is already rendered, use it
+                    let node_elem = node_sig.get().elem_ref
+                        // must create a new node to insert if it's not already present
+                        .unwrap_or(node_sig.create_elem());
+                    // this defaults to `.add_child()` if `optional_before_elem` is `None`
+                    parent_elem.insert_before(&node_elem, 
+                        optional_before_elem.as_ref()).unwrap();
+                    node_sig.update_untracked(|n| {
+                        // remove if not in view
+                        if !node_elem.elem_is_in_view() {
+                            log!("NOT IN VIEW");
+                            node_elem.remove();
+                            n.elem_ref = None;
+                        } else {
+                            log!("IN VIEW");
+                            n.elem_ref = Some(node_elem);
+                        }
+                        n.parent = Some(self.clone());
+                        log!("NO CHILDREN? hash: {:?}", n.children[0].get_untracked().hash);
+                    });
+                    // log!("pre-len: {:?}", parent.children.len());
+                    parent.children.insert(idx+i, node_sig.to_owned());
+                    // log!("post-len: {:?}", parent.children.len());
+                }
+            // insert as last children
+            } else {
+                for node_sig in nodes {
+                    // if the node we're moving is already rendered, use it
+                    let node_elem = node_sig.get().elem_ref
+                        // must create a new node to insert if it's not already present
+                        .unwrap_or(node_sig.create_elem());
+                    parent_elem.append_child(&node_elem).unwrap();
+                    node_sig.update_untracked(|n| {
+                        // remove if not in view
+                        if !node_elem.elem_is_in_view() {
+                            node_elem.remove();
+                            n.elem_ref = None;
+                        } else {
+                            n.elem_ref = Some(node_elem);
+                        }
+                        n.parent = Some(self.clone())
+                    });
+                    parent.children.push(node_sig.to_owned());
+                }
+            }
+        });
+    }
+}
+
+pub trait RemoveThisBlockShell {
+    fn remove_this_block_shell(&self);
+}
+impl RemoveThisBlockShell for RwSignal<PageNode> {
+    /// remove this block, while placing the contents on the same level as 
+    /// this block
+    fn remove_this_block_shell(&self) {
+        let curr_block = self.get_untracked();
+        // remove each child, using this block as the node to insert before
+        let parent_sig = curr_block.parent.unwrap();
+        log!("pre-len: {:?}", parent_sig.get().children.len());
+        parent_sig.insert_nodes(&curr_block.children, Some(self));
+        log!("post-len: {:?}", parent_sig.get().children.len());
+        // remove this block
+        parent_sig.remove_child(self);
+    }
+}
+
 // struct RwSignal<T>()
 // impl Debug for RwSignal<PageNode> {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -292,28 +530,30 @@ pub fn add_hashes(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>,
     for (i, node) in nodes.iter().enumerate() {
         let mut location = location.clone();
         location.push(i);
-        // create & add hash/location if not present
-        if node.get().hash == "".to_string() {
-            let mut hash = rand_alphanumerecimal_hash();
-            loop {
-                let hash_in_locations = locations
-                    .update_returning_untracked(|ls| {
-                        !ls.contains_key(&hash)
-                    }).unwrap();
-                if hash_in_locations { break }
-                hash = rand_alphanumerecimal_hash();
-            }
-            locations.update(|h| {
-                h.insert(hash.clone(), location.clone());
-            });
-            nodes[i].update(|e| e.hash = hash.clone())
+        // create & add hash/location
+        let mut hash = rand_alphanumerecimal_hash();
+        loop { // keep generating until find hash not already used
+            if !locations.contains_hash(&hash) { break }
+            hash = rand_alphanumerecimal_hash();
         }
+        locations.insert_hash(hash.clone(), location.clone());
+        node.update_untracked(|e| e.hash = hash.clone());
         // if children present in node, update those too
-        let children = node.get().children;
-        if !children.is_empty()  {
-            add_hashes(&children, location, locations);
-        }
-    };
+        add_hashes(&node.get().children, location, locations);
+    }
+}
+/// overwrite each hash location in `locations` with its current location
+pub fn update_hash_locations(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>, 
+    locations: RwSignal<HashMap<String, Vec<usize>>>) {
+    for (i, node) in nodes.iter().enumerate() {
+        let mut location = location.clone();
+        location.push(i);
+        // update hash location
+        let hash = node.update_returning_untracked(|n| n.hash.clone()).unwrap();
+        locations.insert_hash(hash.clone(), location.clone());
+        // if children present in node, update those too
+        update_hash_locations(&node.get().children, location, locations);
+    }
 }
 
 /// generate an alphanumeric hash string of length 5
@@ -363,7 +603,7 @@ fn rand_alphanumerecimal_hash() -> String {
 }
 
 pub fn init_demo_page_data(cx: Scope) -> RwSignal<Page> {
-    let mut page = PageNode::signal_from(cx, 
+    let page = PageNode::signal_from(cx, 
         "".into(), PageNodeType::Page,
         HashMap::new(), Vec::new(), None, 0
     );

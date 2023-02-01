@@ -1,6 +1,49 @@
 use leptos::{log, Scope, RwSignal, create_rw_signal};
 use web_sys::Element;
-use super::{Page, PageNode, create_elem, HashToLocation};
+
+use super::{Page, PageNode, CreateElem, HashToLocation, IsFirstChild, IsLastChild, NextChild};
+
+trait GetPageElem {
+    fn get_page_elem(&self) -> Element;
+}
+impl GetPageElem for Element {
+    /// get page elem (scroll window)
+    fn get_page_elem(&self) -> Element {
+        let mut elem = self.parent_element().unwrap();
+        loop {
+            if elem.get_attribute("type").unwrap() == "scroll-window" {
+                return elem;
+            }
+            elem = elem.parent_element().unwrap();
+        }
+    }
+}
+pub trait ElemIsInView {
+    fn elem_is_in_view(&self) -> bool;
+}
+impl ElemIsInView for Element {
+    /// check this element is in view (should be rendered)
+    fn elem_is_in_view(&self) -> bool {
+        // get page elem
+        let page_elem = self.get_page_elem();
+        let page_top_edge = page_elem.get_bounding_client_rect().top();
+        let elem_bot_edge = self.get_bounding_client_rect().bottom();
+        let px_bot_above_top = page_top_edge - elem_bot_edge;
+        if px_bot_above_top > REMOVE_DISTANCE {
+            return false;
+        }
+        let page_bot_edge = page_elem.get_bounding_client_rect().bottom();
+        let elem_top_edge = self.get_bounding_client_rect().top();
+        let px_top_below_bot = elem_top_edge - page_bot_edge;
+        if px_top_below_bot > REMOVE_DISTANCE {
+            return false;
+        }
+        return true;
+    }
+}
+
+const REMOVE_DISTANCE: f64 = 50.0;
+const ADD_DISTANCE: f64 = 20.0;
 
 pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem: &Element) {
 
@@ -9,9 +52,6 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
 
     let top_elem_data = page_data.get().top_elem;
     let bot_elem_data = page_data.get().bot_elem;
-
-    const REMOVE_DISTANCE: f64 = 50.0;
-    const ADD_DISTANCE: f64 = 20.0;
 
     let mut top_done = false;
     let mut bot_done = false;
@@ -69,10 +109,8 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 new_top_pad = (new_top_pad as f64 - height as f64) as u32;
                 new_top_node = prev_node;
                 update_top_padding(page_elem, new_top_pad);
-            } else {
-                // if already first, we are done
-                top_done = true;
-            }
+            // if already first, we are done
+            } else { top_done = true }
         // ==REMOVE THE TOP ELEMENT==
         } else if px_bot_above_top > REMOVE_DISTANCE {
             // can only remove the current top element if there is 
@@ -84,21 +122,15 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 new_top_pad = new_top_pad + height;
                 new_top_node = next_node;
                 update_top_padding(page_elem, new_top_pad);
-            } else {
-                // if already last, we are done
-                top_done = true;
-            }
-        } else {
-            top_done = true;
-        }
+            // if already last, we are done
+            } else { top_done = true }
+        } else { top_done = true }
         }
         let new_bot_elem = new_bot_node.get().elem_ref.unwrap();
         let bot_elem_top_edge = new_bot_elem.get_bounding_client_rect().top();
         let bot_elem_bot_edge = new_bot_elem.get_bounding_client_rect().bottom();
         let px_top_below_bot = bot_elem_top_edge - page_bot_edge;
         let px_bot_below_bot = bot_elem_bot_edge - page_bot_edge;
-        // log!("page-bot: {:?}, bot-elem-edge: {:?}", page_bot_edge, bot_elem_top_edge);
-        // log!("px_below_bot: {:?}", px_below_bot);
         // ==RENDER THE ELEMENT BELOW IT==
         if px_bot_below_bot < ADD_DISTANCE {
             if let Some(next_node) = get_next_block_node(&new_bot_node.get().hash, page_data) {
@@ -109,10 +141,8 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 new_bot_pad = (new_bot_pad as f64 - height as f64) as u32;
                 new_bot_node = next_node;
                 update_bot_padding(page_elem, new_bot_pad);
-            } else {
-                // if already last, we are done
-                bot_done = true;
-            }
+            // if already last, we are done
+            } else { bot_done = true }
         // ==REMOVE THE BOT ELEMENT==
         } else if px_top_below_bot > REMOVE_DISTANCE {
             if let Some(prev_node) = get_prev_block_node(&new_bot_node.get().hash, page_data) {
@@ -122,13 +152,9 @@ pub fn update_dom_nodes_in_view(cx: Scope, page_data: RwSignal<Page>, page_elem:
                 new_bot_pad = new_bot_pad + height;
                 new_bot_node = prev_node;
                 update_bot_padding(page_elem, new_bot_pad);
-            } else {
-                // if already first, we are done
-                bot_done = true;
-            }
-        } else {
-            bot_done = true;
-        }
+            // if already first, we are done
+            } else { bot_done = true }
+        } else { bot_done = true }
     }
     let new_top_hash = new_top_node.get().hash;
     if new_top_hash != top_elem_data.get().hash {
@@ -160,13 +186,13 @@ pub fn update_bot_padding(page_elem: &Element, pad: u32) {
 
 // TODO: tbh it might be better to create a new implementation of insert that uses a slice of the nodes, as we'll already need something like this for e.g. copy and paste
 
+/// 1. INSERT THE PREV NODE ALONG WITH ALL ITS PARENTS IF THEY DON'T EXIST
+/// 2. ADD DOM_REF TO THE NODE(S)
+/// 3. CALCULATE THE HEIGHT OF THE ELEMENT(S) BEING ADDED ITS USING AND, THEN 
+/// UPDATE THE PADDING DIV BY REMOVING THE HEIGHT
 fn insert_new_node_before(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
-    // 1. INSERT THE PREV NODE ALONG WITH ALL ITS PARENTS IF THEY DON'T EXIST
-    // 2. ADD DOM_REF TO THE NODE
-    // 3. CALCULATE THE HEIGHT ITS USING (INCLUDING ANY PARENT NODES, E.G. 
-    // BLOCK PADDING) AND, THEN UPDATE THE PADDING DIV BY REMOVING THE HEIGHT
     let mut child_node = new_node;
-    let mut child_elem: Element = create_elem(child_node);
+    let mut child_elem: Element = child_node.create_elem();
 
     // if this is the last child, we must add its parent. if the parent is the 
     // last child of its parent, we must add its parent, etc
@@ -179,35 +205,25 @@ fn insert_new_node_before(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
             n.elem_ref = Some(child_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
         });
         let parent_node = child_node.get().parent.unwrap();
-        let children = parent_node.get().children;
-        let is_last_child = child_node.get().hash == children.last().unwrap().get().hash;
-        if is_last_child {
+        if parent_node.is_last_child(&child_node) {
             // if child is last child, it means we have to add the parent node too
             let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the top instead of only the top element
                 let mut parent = parent_node.get();
                 parent.children = Vec::new();
-                create_elem(create_rw_signal(cx, parent))
+                create_rw_signal(cx, parent).create_elem()
             };
             castrated_parent_elem.append_child(&child_elem).unwrap();
             child_elem = castrated_parent_elem;
             child_node = parent_node;
         } else {
-            for i in 0..children.len() {
-                // FIRST CHILD W/ .ELEM_REF = SOME() WILL BE THE child_node 
-                // ITSELF BC IF ITS THE FIRST child_node WE SET THE 
-                // .ELEM_REF BEFORE THE LOOP, AND IF IT'S A PARENT, WE SET 
-                // THE .ELEM_REF WHEN WE CHANGE child_node TO THE PARENT
-                if children[i].get().elem_ref.is_none() { continue }
-
-                // get the first rendered (i.e. rendered to DOM) child, 
-                // and insert new elem before it
-                let first_rendered_child = children[i+1].get().elem_ref.unwrap();
-                let parent_elem = parent_node.get().elem_ref.unwrap();
-                parent_elem.insert_before(&child_elem, 
-                    Some(&first_rendered_child)).unwrap();
-                return child_elem.get_bounding_client_rect().height() as u32;
-            }
-            panic!("this should not happen !!");
+            // since we're inserting before the child to the right, we need the 
+            // element of the next child so we know where exactly to insert
+            let next_child = parent_node.next_child(&child_node).unwrap();
+            let next_elem = next_child.get().elem_ref.unwrap();
+            let parent_elem = parent_node.get().elem_ref.unwrap();
+            parent_elem.insert_before(&child_elem, 
+                Some(&next_elem)).unwrap();
+            return child_elem.get_bounding_client_rect().height() as u32;
         }
     }
 }
@@ -228,9 +244,7 @@ fn remove_top_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
         // we need to remove the parent node too. then we check 
         // the parent node of the parent node, etc
         if let Some(parent_node) = child_node.get().parent {
-            let children = parent_node.get().children;
-            let is_last_child = child_node.get().hash == children.last().unwrap().get().hash;
-            if is_last_child {
+            if parent_node.is_last_child(&child_node) {
                 // if the child is the last child, it means we have to remove 
                 // the parent node too
                 child_node = parent_node;
@@ -254,7 +268,7 @@ fn insert_new_node_after(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
     // 3. CALCULATE THE HEIGHT ITS USING (INCLUDING ANY PARENT NODES, E.G. 
     // BLOCK PADDING) AND, THEN UPDATE THE PADDING DIV BY REMOVING THE HEIGHT
     let mut child_node = new_node;
-    let mut child_elem: Element = create_elem(child_node);
+    let mut child_elem: Element = child_node.create_elem();
 
     // if this is the first child, we must add its parent. if the parent is the 
     // first child of its parent, we must add its parent, etc
@@ -267,14 +281,12 @@ fn insert_new_node_after(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
             n.elem_ref = Some(child_elem.clone()) // cloning refers to the same element since its just a ref (i have confirmed this)
         });
         let parent_node = child_node.get().parent.unwrap();
-        let children = parent_node.get().children;
-        let is_first_child = child_node.get().hash == children[0].get().hash;
-        if is_first_child {
+        if parent_node.is_first_child(&child_node) {
             // if child is first child, it means we have to add the parent node too
             let castrated_parent_elem = { // using parent elem with no children otherwise all of its children would be added to the bot instead of only the bot element
                 let mut parent = parent_node.get();
                 parent.children = Vec::new();
-                create_elem(create_rw_signal(cx, parent))
+                create_rw_signal(cx, parent).create_elem()
             };
             castrated_parent_elem.append_child(&child_elem).unwrap();
             child_elem = castrated_parent_elem;
@@ -304,9 +316,7 @@ fn remove_bot_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
         // we need to remove the parent node too. then we check 
         // the parent node of the parent node, etc
         if let Some(parent_node) = child_node.get().parent {
-            let children = parent_node.get().children;
-            let is_first_child = child_node.get().hash == children[0].get().hash;
-            if is_first_child {
+            if parent_node.is_first_child(&child_node) {
                 // if the child is the first child, it means we have to remove 
                 // the parent node too
                 child_node = parent_node;

@@ -5,12 +5,12 @@ use serde::Serialize;
 use tauri_sys::{event, tauri};
 use web_sys::{Element, Node, CharacterData};
 
-use crate::page_data::ChangeBlockKind;
+use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell};
 
 // use src_ui::*;
 use super::{
     Page, PageNode, PageNodeType, init_demo_page_data, IsFirstChild, IsBlock,
-    HashToLocation, HashToNode,
+    HashToLocation, HashToNode, update_hash_locations,
     update_dom_nodes_in_view, update_top_padding, update_bot_padding
 };
 
@@ -135,12 +135,18 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
         // FIXME: only need to prevent default if the delete if the first 
         // char in a block
 
+        // TODO: given how hard it seems like it will be to merge and them 
+        // unmerge  nodes for undo/redo history. a simple solution, at leasst 
+        // for now, it to just make a copy of the entire range of all nodes 
+        // changing at that instance
+
         if sel_type == "Caret"  {
             // DELETE key pressed
             if event.key_code() == Key::Delete.key_code() {
                 if start_offset == 0 {
                     let mut child_sig = start_span_node;
                     loop {
+                        log!("loop");
                         let parent_sig = child_sig.get().parent.unwrap();
                         if !parent_sig.is_first_child(&child_sig) { break }
                         if !parent_sig.is_block() {
@@ -148,9 +154,46 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                             continue;
                         }
                         let parent = parent_sig.get();
+                        // IF THE FIRST PARENT BLOCK IS A TextBlock, THERE IS 
+                        // NOT NECESSARILY A SPECIALIZED BLOCK TO CONVERT TO A 
+                        // TextBlock. WE NEED TO CHECK IF THE PARENT BLOCK'S 
+                        // PARENT BLOCK IS A BRANCH BLOCK THAT IS NOT THE ROOT 
+                        // PAGE BLOCK (as of now, Indent, or Quote)
+                        // if the parent block is `Page`, we need to check if 
+                        // there is a block above the current parent (that 
+                        // isn't a table), and if so, append the text in the 
+                        // `TextBlock` to the block above. if the parent block instead is a 
                         if parent.kind == PageNodeType::TextBlock { 
-                            // TODO: JOIN TO BLOCK ABOVE IF PRESENT AND NO BLOCK CONTAINING THE TEXT BLOCK
-                            break;
+                            // // TODO: JOIN TO BLOCK ABOVE IF PRESENT AND NO BLOCK CONTAINING THE TEXT BLOCK
+
+                            // // PARENT = TEXT BLOCK
+
+                            // // FIXME: WAIT I DONT THINK IT MATTERS IF PAGE OR INDENT OR QUOTE
+                            let parent_parent_sig = parent.parent.unwrap();
+                            if let Some(prev_child) = parent_parent_sig.prev_child(&parent_sig) {
+
+                                // get deepest branch block
+
+                                // TODO: this
+
+                            // }
+
+                            // IF NO PREV CHILD AND KIND != PAGE, REMOVE THE 
+                            // PARENT_PARENT BLOCK
+                            // (IF PAGE, NOTHING TO DO)
+                            } else {
+                                if parent_parent_sig.get().kind != PageNodeType::Page {
+                                    log!("IS INDENT OR QUOTE");
+                                    parent_parent_sig.remove_this_block_shell();
+                                    let locations = page_data.get_untracked().locations;
+                                    locations.update_untracked(|ls| *ls = HashMap::new());
+                                    update_hash_locations(
+                                        &page_data.get_untracked().nodes.get_untracked().children, 
+                                        Vec::new(), locations);
+                                }
+                            }
+                            event.prevent_default();
+                            return;
                         }
                         parent_sig.change_block_kind(PageNodeType::TextBlock);
                         event.prevent_default();
@@ -175,8 +218,8 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                         parent_sig.change_block_kind(PageNodeType::H1);
                         start_span_node.update_untracked(|e| {
                             e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
-                            start_node.delete_data(0, 1).unwrap();
                         });
+                        start_node.delete_data(0, 1).unwrap();
                         event.prevent_default();
                         return;
                     }
@@ -194,8 +237,27 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                         parent_sig.change_block_kind(PageNodeType::Dot);
                         start_span_node.update_untracked(|e| {
                             e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
-                            start_node.delete_data(0, 1).unwrap();
                         });
+                        start_node.delete_data(0, 1).unwrap();
+                        event.prevent_default();
+                        return;
+                    }
+                } else if start_offset == 1 && &txt_node_str[0..1] == ">" {
+                    let mut child_sig = start_span_node;
+                    loop {
+                        let parent_sig = child_sig.get().parent.unwrap();
+                        if !parent_sig.is_first_child(&child_sig) { break }
+                        if !parent_sig.is_block() {
+                            child_sig = parent_sig;
+                            continue;
+                        }
+                        let parent = parent_sig.get();
+                        if parent.kind != PageNodeType::TextBlock { break }
+                        parent_sig.change_block_kind(PageNodeType::Quote);
+                        start_span_node.update_untracked(|e| {
+                            e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                        });
+                        start_node.delete_data(0, 1).unwrap();
                         event.prevent_default();
                         return;
                     }
@@ -261,6 +323,12 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
             // }
         // }
 
+
+        // refresh view
+        if let Some(page_elem) = &page_elem_ref.get() {
+            let page_elem = page_elem.unchecked_ref::<web_sys::Element>();
+            update_dom_nodes_in_view(cx, page_data, &page_elem.clone());
+        };
     };
 
     // TODO: CAN CONVERT MOST SIGNALS TO STORES OR BOXES OR SOMETHING THAT IS 
@@ -271,6 +339,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     // init render
     create_effect(cx, move |_| {
+        log!("EFFECT");
         if let Some(page_elem) = page_elem_ref.get() {
             request_animation_frame(move || {
                 let page_elem = page_elem.unchecked_ref::<web_sys::Element>().to_owned();
@@ -304,9 +373,9 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 // padding, then unrender lvl2 block 0 & add padding, then 
                 // lvl2 block 0, etc
 
-                let top_hash = page_data.get().top_elem.get().hash;
+                let top_hash = page_data.get_untracked().top_elem.get_untracked().hash;
                 init_page_nodes(page_data, &page_elem, &page_elem, 
-                    page_data.get().nodes, &page_data.hash_to_location(&top_hash));
+                    page_data.get_untracked().nodes, &page_data.hash_to_location(&top_hash));
 
                 let bot_fixed_padding = document().create_element("div").unwrap();
                 bot_fixed_padding.set_attribute("style", "height: 50px").unwrap();
@@ -459,38 +528,42 @@ pub fn init_page_nodes(
     }
 }
 
-// NOTE: `RwSignal` is required to update the `.elem_ref` properties
-/// create elem and add elem_ref to node
-pub fn create_elem(
-    node_sig: RwSignal<PageNode>,
-) -> Element {
-    let node = node_sig.get();
-    let children = node.children.clone();
-    let elem: Element;
-    if node.is_block() {
-        elem = match node.kind {
-            PageNodeType::Quote => create_quote_elem(node),
-            PageNodeType::H1 => create_h1_elem(node),
-            PageNodeType::Dot => create_dot_elem(node),
-            PageNodeType::TextBlock => create_text_block_elem(node),
-            _ => create_unknown_block_elem(node),
-        };
-        node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
-    } else {
-        elem = match node.kind {
-            PageNodeType::RawText => create_raw_text_elem(node),
-            _ => create_unknown_span_elem(node),
-        };
-        // FIXME: CURRENTLY NOT ADDING REF BC IDK IF USEFUL, AND ONLY 
-        // CURRENTLY DELETE BLOCK REFS WHEN A DOM ELEM IS REMOVED
-        // node_sig.update(|n| { n.elem_ref = Some(elem) });
+pub trait CreateElem {
+    fn create_elem(&self) -> Element;
+}
+impl CreateElem for RwSignal<PageNode> {
+    // NOTE: `RwSignal` is required to update the `.elem_ref` properties
+    /// create elem and add elem_ref to node
+    fn create_elem(&self) -> Element {
+        let node_sig = self;
+        let node = node_sig.get();
+        let children = node.children.clone();
+        let elem: Element;
+        if node.is_block() {
+            elem = match node.kind {
+                PageNodeType::Quote => create_quote_elem(node),
+                PageNodeType::H1 => create_h1_elem(node),
+                PageNodeType::Dot => create_dot_elem(node),
+                PageNodeType::TextBlock => create_text_block_elem(node),
+                _ => create_unknown_block_elem(node),
+            };
+            node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
+        } else {
+            elem = match node.kind {
+                PageNodeType::RawText => create_raw_text_elem(node),
+                _ => create_unknown_span_elem(node),
+            };
+            // FIXME: CURRENTLY NOT ADDING REF BC IDK IF USEFUL, AND ONLY 
+            // CURRENTLY DELETE BLOCK REFS WHEN A DOM ELEM IS REMOVED
+            // node_sig.update(|n| { n.elem_ref = Some(elem) });
+        }
+        // add children if any
+        for child in children {
+            let child_elem = child.create_elem();
+            elem.append_child(&child_elem).unwrap();
+        }
+        elem
     }
-    // add children if any
-    for child in children {
-        let child_elem = create_elem(child);
-        elem.append_child(&child_elem).unwrap();
-    }
-    elem
 }
 
 fn create_page_elem(node: PageNode) -> Element {
