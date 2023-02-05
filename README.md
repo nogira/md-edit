@@ -1,4 +1,4 @@
-# md-edit
+# md-edit [WIP]
 
 WYSIWYG markdown text editing block
 
