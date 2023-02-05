@@ -1,5 +1,6 @@
-# iki
-personal wiki/notes
+# md-edit
+
+WYSIWYG markdown text editing block
 
 ---
 
