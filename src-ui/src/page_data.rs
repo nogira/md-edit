@@ -444,7 +444,7 @@ pub enum PageNodeType {
     // block-branch
     Indent, Quote, 
     // block-leaf
-    TextBlock, H1, H2, H3, H4, H5, CodeBlock, Dot, Num, Check,
+    TextBlock, H1, H2, H3, H4, H5, CodeBlock, Dot, Num, Check, Table, // tbh table could be a branch too ???
     // text-branch
     Bold, Italic, Highlight, CodeInline, FileLink, UrlLink,
     // text-leaf
@@ -459,7 +459,7 @@ struct PageNodeTypeInfo {
     branch: bool,
     innate_height: u32,
 }
-const NUM_TYPES: usize = 20;
+const NUM_TYPES: usize = 21;
 // NOTE: THIS MUST BE IN SAME ORDER AS THE ENUM  FOR THE INDEXING TO WORK
 const PAGE_NODE_TYPE_INFO: [PageNodeTypeInfo; NUM_TYPES] = [
     // Page
@@ -490,6 +490,8 @@ const PAGE_NODE_TYPE_INFO: [PageNodeTypeInfo; NUM_TYPES] = [
     PageNodeTypeInfo { val: "n", block: true, branch: false, innate_height: 0 },
     // Check
     PageNodeTypeInfo { val: "ch", block: true, branch: false, innate_height: 0 },
+    // Table
+    PageNodeTypeInfo { val: "tl", block: true, branch: false, innate_height: 0 },
 
     // Bold
     PageNodeTypeInfo { val: "b", block: false, branch: true, innate_height: 0 },
@@ -531,10 +533,10 @@ pub fn add_hashes(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>,
         let mut location = location.clone();
         location.push(i);
         // create & add hash/location
-        let mut hash = rand_alphanumerecimal_hash();
+        let mut hash = rand_utf8_hash();
         loop { // keep generating until find hash not already used
             if !locations.contains_hash(&hash) { break }
-            hash = rand_alphanumerecimal_hash();
+            hash = rand_utf8_hash();
         }
         locations.insert_hash(hash.clone(), location.clone());
         node.update_untracked(|e| e.hash = hash.clone());
@@ -556,49 +558,33 @@ pub fn update_hash_locations(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usiz
     }
 }
 
-/// generate an alphanumeric hash string of length 5
-fn rand_alphanumerecimal_hash() -> String {
-    // chars used: 26 a-z, 10 0-9 -> 36
-    // 36^4 = 1.67 million (1.67 million perhaps too small ?)
-    // 36^5 = 60.4 million <--
-    // 
+/// generate a utf-8 hash string of length 3
+fn rand_utf8_hash() -> String {
+    // chars used: 256 utf-8
     // generated random number: u64 = 2^64 = 18.4 quintillion
+    // 256^3 = 16.777 million
+    // 2^24 = 16.777 million <-- steel-manning max number of hashes needed lets assume each word has its own hash. at 17 million words, the text file would be approx 100mb. these seems extremely unlikely. https://www.quora.com/If-I-would-have-a-1GB-text-file-txt-approximately-how-many-words-would-it-include
+    // 256^4 = 4.29 billion
     // 2^32 = 4.29 billion
-    // 2^16 = 65k
-    // 2^26 = 67.1 million <--
-    //
-    // TODO: 
-    // chars used: 26 a-z, 26 A-Z, 10 0-9 -> 62
-    // 62^4 = 14.7 million
-    // 2^24 = 16.7 million <--
     let gen_rand_num = || {
         let mut hasher = DefaultHasher::new();
         Math::random().to_bits().hash(&mut hasher);
         let bits_32 = hasher.finish() as u32;
-        // 32 - 26 = 6
-        let clipper = u32::MAX >> 6;
+        // 32 - 24 = 8
+        let clipper = u32::MAX >> 8;
         let clipped = bits_32 & clipper;
         clipped
     };
-    const MAX: u32 = 36_u32.pow(5) - 1;
-    const BASE: u32 = 36_u32;
-    loop {
-        let mut hash_str = String::new();
-        let mut carry = gen_rand_num();
-        if carry <= MAX {
-            loop {
-                let rem = carry % BASE;
-                if rem < 10 { hash_str.push_str(&format!("{}", rem)) }
-                // `'a' == 97 as char`
-                else { hash_str.push(char::from_u32(rem + 87).unwrap()) }
-
-                if carry == rem {
-                    return hash_str
-                } else {
-                    carry = (carry - rem) / BASE;
-                }
-            }
-        }
+    // we're treating each char in the hash as a number with base 256 (like 
+    // how the decimal system uses a number with base 10)
+    const BASE: u32 = 256_u32;
+    let mut hash_str = String::new();
+    let mut carry = gen_rand_num();
+    loop { // loop to generate each of the 3 chars of the hash
+        let rem = carry % BASE;
+        hash_str.push(char::from_u32(rem).unwrap());
+        if carry == rem { return hash_str }
+        carry = (carry - rem) / BASE;
     }
 }
 

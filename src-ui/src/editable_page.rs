@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use core::{cmp::min, fmt::Debug};
-use leptos::{*, js_sys::{Math, Date}};
-use serde::Serialize;
-use tauri_sys::{event, tauri};
-use web_sys::{Element, Node, CharacterData};
+use core::cmp::min;
+use leptos::*;
+// use tauri_sys::{event, tauri};
+use web_sys::{Element, CharacterData};
 
 use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell};
 
@@ -11,18 +10,11 @@ use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell};
 use super::{
     Page, PageNode, PageNodeType, init_demo_page_data, IsFirstChild, IsBlock,
     HashToLocation, HashToNode, update_hash_locations,
-    update_dom_nodes_in_view, update_top_padding, update_bot_padding
+    update_dom_nodes_in_view, update_top_padding, update_bot_padding, get_prev_block_node,
 };
 
 // TODO: CUSTOMIZABLE MARKDOWN SYNTAX. E.G. IF YOU WANT `/` FOR ITALICS YOU CAN 
 // JUST PICK IT
-
-/// pass in the element that has been updated, and update all elements IN_VIEW 
-/// below. we don't need to update ones out of view bc they will update when 
-/// we scroll down to them
-fn update_dims(start_elem: Vec<usize>) {
-
-}
 
 // seems EXTREMELY complex/janky to get the top/bottom/height of each element 
 // bc it must be rendered to the DOM to have those attributes, and there is no 
@@ -170,13 +162,41 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
                             // // FIXME: WAIT I DONT THINK IT MATTERS IF PAGE OR INDENT OR QUOTE
                             let parent_parent_sig = parent.parent.unwrap();
-                            if let Some(prev_child) = parent_parent_sig.prev_child(&parent_sig) {
+                            if let Some(_) = parent_parent_sig.prev_child(&parent_sig) {
 
+                                // TODO: this:
                                 // get deepest branch block
+                                // let deepest_branch = 
+                                // if last child is NOT a text leaf (e.g. 
+                                // table), merge text into leaf block, else do nothing
+                                let prev_block_sig = get_prev_block_node( // this is a leaf block
+                                    &parent_sig.get().hash,
+                                    page_data
+                                ).unwrap();
+                                if prev_block_sig.get().kind == PageNodeType::Table {
+                                    event.prevent_default();
+                                    return
+                                }
+                                // don't bother merging nodes if they have the 
+                                // same span type (e.g. bold last child of 
+                                // prev block w/ bold first child of current 
+                                // text block)
 
-                                // TODO: this
-
-                            // }
+                                // move from parent_sig children to `prev_block`
+                                // let prev_block_last_child = prev_block_sig.get().children.first().unwrap();
+                                // let text_block_last_child = parent_sig.get().children.first().unwrap();
+                                prev_block_sig.update_untracked(|prev_block| {
+                                    parent_sig.update_untracked(|text_block| {
+                                        // JOIN IF NODES MATCH
+                                        let prev_block_elem = prev_block.elem_ref.clone().unwrap();
+                                        for child in text_block.children.clone() {
+                                            let child_elem = child.get().elem_ref.unwrap();
+                                            prev_block_elem.append_child(&child_elem).unwrap();
+                                        }
+                                        prev_block.children.append(&mut text_block.children);
+                                    });
+                                });
+                                parent_sig.get_untracked().elem_ref.unwrap().remove();
 
                             // IF NO PREV CHILD AND KIND != PAGE, REMOVE THE 
                             // PARENT_PARENT BLOCK
@@ -457,13 +477,13 @@ pub fn init_page_nodes(
             PageNodeType::TextBlock => create_text_block_elem(node),
             _ => create_unknown_block_elem(node),
         };
-        node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
     } else {
         elem = match kind {
             PageNodeType::RawText => create_raw_text_elem(node),
             _ => create_unknown_span_elem(node),
-        }
+        };
     }
+    node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
     // must mount before adding children do the children themselves are mounted
     mount_elem.append_child(&elem).unwrap();
     // mount children if any
@@ -596,12 +616,12 @@ fn create_dot_elem(node: PageNode) -> Element {
 }
 
 
-fn create_num_elem(node: PageNode) -> Element {
-    let elem = document().create_element("div").unwrap();
-    elem.set_attribute("type", PageNodeType::Num.value()).unwrap();
-    elem.set_attribute("hash", &node.hash).unwrap();
-    elem
-}
+// fn create_num_elem(node: PageNode) -> Element {
+//     let elem = document().create_element("div").unwrap();
+//     elem.set_attribute("type", PageNodeType::Num.value()).unwrap();
+//     elem.set_attribute("hash", &node.hash).unwrap();
+//     elem
+// }
 
 fn create_text_block_elem(node: PageNode) -> Element {
     let elem = document().create_element("div").unwrap();
