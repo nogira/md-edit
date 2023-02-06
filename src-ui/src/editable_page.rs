@@ -4,7 +4,7 @@ use leptos::*;
 // use tauri_sys::{event, tauri};
 use web_sys::{Element, CharacterData};
 
-use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell};
+use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell, InsertNodes};
 
 // use src_ui::*;
 use super::{
@@ -177,26 +177,82 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                                     event.prevent_default();
                                     return
                                 }
-                                // don't bother merging nodes if they have the 
-                                // same span type (e.g. bold last child of 
-                                // prev block w/ bold first child of current 
-                                // text block)
+                                /*
+                                prev block, last elem
+                                <b>ooo<i>ooo</i></b>
 
-                                // move from parent_sig children to `prev_block`
-                                // let prev_block_last_child = prev_block_sig.get().children.first().unwrap();
-                                // let text_block_last_child = parent_sig.get().children.first().unwrap();
-                                prev_block_sig.update_untracked(|prev_block| {
-                                    parent_sig.update_untracked(|text_block| {
-                                        // JOIN IF NODES MATCH
-                                        let prev_block_elem = prev_block.elem_ref.clone().unwrap();
-                                        for child in text_block.children.clone() {
-                                            let child_elem = child.get().elem_ref.unwrap();
-                                            prev_block_elem.append_child(&child_elem).unwrap();
+                                text block, first elem
+                                <b><i>ooo</i>ooo</b>
+
+                                1. check last elem same as first elem. 
+                                if true, append elems after first then 
+                                check first elem of first elem, if 
+                                false, append all elems
+                                */
+                                let mut node_1_sig = prev_block_sig; // prev block
+                                let mut node_2_sig = parent_sig; // current text block
+                                loop {
+                                    let node_1 = node_1_sig.get_untracked();
+                                    let mut node_2 = node_2_sig.get_untracked();
+
+                                    let node_1_children_len = node_1.children.len();
+
+                                    let last_child = node_1.children.last().unwrap().clone();
+                                    let first_child = node_2.children.remove(0);
+                                    let second_child_sig = node_2.children.get(1);
+                                    // first append children after first bc will need to regardless
+                                    for child in node_2.children.iter() {
+                                        let child_elem = child.get().elem_ref.unwrap();
+                                        // move elem
+                                        node_1.elem_ref.clone().unwrap()
+                                            .append_child(&child_elem).unwrap();
+                                        // move node
+                                        node_1_sig.update_returning_untracked(|n| {
+                                            n.children.push(child.to_owned());
+                                        });
+                                    }
+                                    let first_child_kind = first_child.get().kind;
+                                    if last_child.get().kind == first_child_kind {
+                                        // if no children, this is a raw text 
+                                        // node, so we need to append the text
+                                        if first_child_kind == PageNodeType::RawText {
+                                            node_1_sig.insert_nodes(&vec![first_child], second_child_sig);
+                                            break;
                                         }
-                                        prev_block.children.append(&mut text_block.children);
-                                    });
-                                });
+                                        // else check children
+                                        node_1_sig = last_child;
+                                        node_2_sig = first_child;
+                                    // if different span types, simply append
+                                    } else {
+                                        // node_1_elem.append_child(&child_elem).unwrap();
+                                        // // move node
+                                        // node_1_sig.update_returning_untracked(|n| {
+                                        //     n.children.push(child.to_owned());
+                                        // });
+                                        node_1_sig.insert_nodes(&vec![first_child], second_child_sig);
+                                        break;
+                                    }
+                                }
+
+                                // remove elem
                                 parent_sig.get_untracked().elem_ref.unwrap().remove();
+                                // remove node
+                                parent_parent_sig.update_untracked(|n| {
+                                    for (i, child) in n.children.clone().iter().enumerate() {
+                                        if child == &parent_sig {
+                                            n.children.remove(i);
+                                            break;
+                                        }
+                                    }
+                                });
+                                // update hashes
+                                update_hash_locations(&page_data);
+
+                                // FIXME: need to reassign the cursor position 
+                                // bc javascript still thinks its in the 
+                                // element we just deleted, so if we press an 
+                                // arrow key, it will error
+                                // (this is also relevent to the code below)
 
                             // IF NO PREV CHILD AND KIND != PAGE, REMOVE THE 
                             // PARENT_PARENT BLOCK
@@ -205,11 +261,7 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                                 if parent_parent_sig.get().kind != PageNodeType::Page {
                                     log!("IS INDENT OR QUOTE");
                                     parent_parent_sig.remove_this_block_shell();
-                                    let locations = page_data.get_untracked().locations;
-                                    locations.update_untracked(|ls| *ls = HashMap::new());
-                                    update_hash_locations(
-                                        &page_data.get_untracked().nodes.get_untracked().children, 
-                                        Vec::new(), locations);
+                                    update_hash_locations(&page_data);
                                 }
                             }
                             event.prevent_default();
@@ -652,6 +704,10 @@ fn create_unknown_span_elem(node: PageNode) -> Element {
     elem.set_inner_html("‼️ only raw text allowed");
     elem
 }
+
+// fn new_cursor_position() {
+
+// }
 
 // fn page_nodes(
 //     page_data: RwSignal<Page>,

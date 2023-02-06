@@ -1,9 +1,10 @@
-use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, UntrackedSettableSignal, UntrackedGettableSignal, ev::scroll, JsCast, document};
+use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, 
+    UntrackedSettableSignal, UntrackedGettableSignal, JsCast};
 use web_sys::{Node, Element};
-use std::{hash::{Hash, Hasher, self}, collections::{HashMap, hash_map::DefaultHasher}};
+use std::{hash::{Hash, Hasher}, collections::{HashMap, hash_map::DefaultHasher}};
 use crate::editable_page::CreateElem;
 
-use super::{get_top_block_node, get_bot_block_node, get_node_from_location, ElemIsInView};
+use super::{get_node_from_location, ElemIsInView};
 
 // tried doing `struct PageSignal(RwSignal<Page>)` wrapper but it introduced 
 // waaaaaaaaay too much complexity that i cbf solving
@@ -545,7 +546,14 @@ pub fn add_hashes(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>,
     }
 }
 /// overwrite each hash location in `locations` with its current location
-pub fn update_hash_locations(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>, 
+pub fn update_hash_locations(page_data: &RwSignal<Page>) {
+    let locations = page_data.get_untracked().locations;
+    locations.update_untracked(|ls| *ls = HashMap::new());
+    update_hash_locations_recursive(
+        &page_data.get_untracked().nodes.get_untracked().children, 
+        Vec::new(), locations);
+}
+pub fn update_hash_locations_recursive(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usize>, 
     locations: RwSignal<HashMap<String, Vec<usize>>>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut location = location.clone();
@@ -554,7 +562,7 @@ pub fn update_hash_locations(nodes: &Vec<RwSignal<PageNode>>, location: Vec<usiz
         let hash = node.update_returning_untracked(|n| n.hash.clone()).unwrap();
         locations.insert_hash(hash.clone(), location.clone());
         // if children present in node, update those too
-        update_hash_locations(&node.get().children, location, locations);
+        update_hash_locations_recursive(&node.get().children, location, locations);
     }
 }
 

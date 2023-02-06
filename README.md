@@ -2,6 +2,8 @@
 
 WYSIWYG markdown text editing block
 
+to increase performance only the text currently in view gets rendered
+
 ---
 
 requires rust nightly
