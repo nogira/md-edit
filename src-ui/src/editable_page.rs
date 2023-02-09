@@ -4,7 +4,7 @@ use leptos::*;
 // use tauri_sys::{event, tauri};
 use web_sys::{Element, CharacterData};
 
-use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell, InsertNodes};
+use crate::page_data::{ChangeBlockKind, PrevChild, RemoveThisBlockShell, InsertNodes, RemoveChild};
 
 // use src_ui::*;
 use super::{
@@ -138,7 +138,6 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                 if start_offset == 0 {
                     let mut child_sig = start_span_node;
                     loop {
-                        log!("loop");
                         let parent_sig = child_sig.get().parent.unwrap();
                         if !parent_sig.is_first_child(&child_sig) { break }
                         if !parent_sig.is_block() {
@@ -195,58 +194,47 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
                                     let node_1 = node_1_sig.get_untracked();
                                     let mut node_2 = node_2_sig.get_untracked();
 
-                                    let node_1_children_len = node_1.children.len();
-
-                                    let last_child = node_1.children.last().unwrap().clone();
-                                    let first_child = node_2.children.remove(0);
+                                    let last_child_sig = node_1.children.last().unwrap().clone();
+                                    let first_child_sig = node_2.children.remove(0);
                                     let second_child_sig = node_2.children.get(1);
+
                                     // first append children after first bc will need to regardless
-                                    for child in node_2.children.iter() {
-                                        let child_elem = child.get().elem_ref.unwrap();
-                                        // move elem
-                                        node_1.elem_ref.clone().unwrap()
-                                            .append_child(&child_elem).unwrap();
-                                        // move node
-                                        node_1_sig.update_returning_untracked(|n| {
-                                            n.children.push(child.to_owned());
-                                        });
-                                    }
-                                    let first_child_kind = first_child.get().kind;
-                                    if last_child.get().kind == first_child_kind {
+                                    node_1_sig.insert_nodes(&node_2.children, None);
+
+                                    let first_child = first_child_sig.get_untracked();
+                                    let last_child = last_child_sig.get_untracked();
+                                    let first_child_kind = first_child.kind;
+                                    let last_child_kind = last_child.kind;
+                                    if last_child_kind == first_child_kind {
                                         // if no children, this is a raw text 
                                         // node, so we need to append the text
                                         if first_child_kind == PageNodeType::RawText {
-                                            node_1_sig.insert_nodes(&vec![first_child], second_child_sig);
+                                            last_child_sig.update_untracked(|n| {
+                                                // merge RawText nodes
+                                                let txt = n.content.get("text").unwrap();
+                                                let apnd = first_child.content.get("text").unwrap();
+                                                let joined = format!("{}{}", txt, apnd);
+                                                n.content.insert("text".into(), joined.clone()).unwrap();
+                                                // append text to DOM text node
+                                                let last_child_elem = n.elem_ref.as_ref().unwrap();
+                                                last_child_elem.set_text_content(Some(&joined));
+                                            });
                                             break;
                                         }
                                         // else check children
-                                        node_1_sig = last_child;
-                                        node_2_sig = first_child;
+                                        node_1_sig = last_child_sig;
+                                        node_2_sig = first_child_sig;
                                     // if different span types, simply append
                                     } else {
-                                        // node_1_elem.append_child(&child_elem).unwrap();
-                                        // // move node
-                                        // node_1_sig.update_returning_untracked(|n| {
-                                        //     n.children.push(child.to_owned());
-                                        // });
-                                        node_1_sig.insert_nodes(&vec![first_child], second_child_sig);
+                                        node_1_sig.insert_nodes(&vec![first_child_sig], second_child_sig);
                                         break;
                                     }
                                 }
-
-                                // remove elem
-                                parent_sig.get_untracked().elem_ref.unwrap().remove();
-                                // remove node
-                                parent_parent_sig.update_untracked(|n| {
-                                    for (i, child) in n.children.clone().iter().enumerate() {
-                                        if child == &parent_sig {
-                                            n.children.remove(i);
-                                            break;
-                                        }
-                                    }
-                                });
+                                // FIXME: this remove might create an error if the first last child is different to the first first child ?? but
+                                parent_parent_sig.remove_child(&parent_sig);
                                 // update hashes
                                 update_hash_locations(&page_data);
+                                // log!("{}", page_data.get_untracked().debug_nodes());
 
                                 // FIXME: need to reassign the cursor position 
                                 // bc javascript still thinks its in the 
@@ -619,7 +607,6 @@ impl CreateElem for RwSignal<PageNode> {
                 PageNodeType::TextBlock => create_text_block_elem(node),
                 _ => create_unknown_block_elem(node),
             };
-            node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
         } else {
             elem = match node.kind {
                 PageNodeType::RawText => create_raw_text_elem(node),
@@ -629,6 +616,7 @@ impl CreateElem for RwSignal<PageNode> {
             // CURRENTLY DELETE BLOCK REFS WHEN A DOM ELEM IS REMOVED
             // node_sig.update(|n| { n.elem_ref = Some(elem) });
         }
+        node_sig.update(|n| { n.elem_ref = Some(elem.clone()) });
         // add children if any
         for child in children {
             let child_elem = child.create_elem();
