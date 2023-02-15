@@ -8,6 +8,7 @@ use leptos::*;
 mod editable_page; use editable_page::*;
 mod render_in_view; use render_in_view::*;
 mod page_data; use page_data::*;
+mod keypress; use keypress::*;
 
 pub fn main() {
     _ = console_log::init_with_level(log::Level::Debug);
