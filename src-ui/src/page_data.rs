@@ -1,10 +1,10 @@
 use leptos::{log, Scope, RwSignal, create_rw_signal, js_sys::Math, 
     UntrackedSettableSignal, UntrackedGettableSignal, JsCast};
-use web_sys::{Node, Element};
+use web_sys::{Node, Element, CharacterData, Selection};
 use std::{hash::{Hash, Hasher}, collections::{HashMap, hash_map::DefaultHasher}};
-use crate::editable_page::CreateElem;
 
-use super::{get_node_from_location, ElemIsInView};
+use super::{get_node_from_location, ElemIsInView, CreateElem, 
+    new_cursor_position, spaces_to_nbsp};
 
 // tried doing `struct PageSignal(RwSignal<Page>)` wrapper but it introduced 
 // waaaaaaaaay too much complexity that i cbf solving
@@ -424,6 +424,36 @@ impl RemoveThisBlockShell for RwSignal<PageNode> {
         log!("post-len: {:?}", parent_sig.get().children.len());
         // remove this block
         parent_sig.remove_child(self);
+    }
+}
+
+pub trait InsertChar {
+    fn insert_char(&self, char: &str, text_node: &CharacterData, offset: u32, selection: &Selection);
+}
+impl InsertChar for RwSignal<PageNode> {
+    fn insert_char(&self, char: &str, text_node: &CharacterData, offset: u32, selection: &Selection) {
+        // there is an indexing mismatch between rust and javascript for 
+        // unicode text, so the easiest way to modify the rust data is to 
+        // simply copy the javascript text
+
+        // originally did `text_node.insert_data(offset, dom_char).unwrap();`, 
+        // but can't add 2 spaces in a row, and trying to add `&nbsp;` doesn't 
+        // convert it to a space when displayed
+        let txt_len = text_node.length();
+        let start_txt = text_node.substring_data(0, offset).unwrap();
+        let end_txt = text_node.substring_data(offset, txt_len - offset).unwrap();
+        let new_txt = format!("{}{}{}", start_txt, char, end_txt);
+
+        self.update_untracked(|n| {
+            let elem = n.elem_ref.clone().unwrap();
+            elem.set_inner_html(&spaces_to_nbsp(&new_txt));
+            
+            let txt_node: CharacterData = elem.first_child().unwrap().dyn_into().unwrap();
+            new_cursor_position(selection, &txt_node, offset);
+            selection.modify("move", "right", "character").unwrap();
+
+            n.content.insert("text".into(), new_txt).unwrap();
+        });
     }
 }
 

@@ -2,7 +2,7 @@ use leptos::{log, RwSignal, document, JsCast, UntrackedGettableSignal,
     UntrackedSettableSignal};
 use web_sys::{CharacterData, Range, Selection, Node};
 use super::{Page, PageNodeType, HashToNode, IsFirstChild, IsBlock, PrevChild, 
-    ChangeBlockKind, InsertNodes, RemoveChild, RemoveThisBlockShell, 
+    ChangeBlockKind, InsertNodes, RemoveChild, RemoveThisBlockShell, InsertChar,
     get_prev_block_node, update_hash_locations};
 
 pub enum Key {
@@ -28,10 +28,10 @@ impl Key {
     }
 }
 
-pub fn new_cursor_position(selection: &Selection, node: &Node, idx: usize) {
-    let range = Range::new().unwrap();
-    range.set_start(node, idx as u32).unwrap();
+pub fn new_cursor_position(selection: &Selection, node: &Node, idx: u32) {
     selection.remove_all_ranges().unwrap();
+    let range = Range::new().unwrap();
+    range.set_start(node, idx).unwrap();
     selection.add_range(&range).unwrap();
 }
 
@@ -71,9 +71,9 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
         if key_code == Key::Delete.key_code() {
             if start_offset == 0 {
                 let mut child_sig = start_span_node;
-                'outer: loop {
+                loop {
                     let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break }
+                    if !parent_sig.is_first_child(&child_sig) { break } // not start of line
                     if !parent_sig.is_block() {
                         child_sig = parent_sig;
                         continue;
@@ -104,7 +104,7 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                                 page_data
                             ).unwrap();
                             if prev_block_sig.get().kind == PageNodeType::Table {
-                                break;
+                                return;
                             }
                             /*
                             prev block, last elem
@@ -157,7 +157,7 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                                             // an arrow key is pressed
                                             new_cursor_position(&selection, 
                                                 &last_child_elem.first_child().unwrap(),
-                                                txt_len);
+                                                txt_len as u32);
                                         });
                                         break 'inner;
                                     }
@@ -187,10 +187,10 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                                 new_cursor_position(&selection, &start_node, 0);
                             }
                         }
-                        break 'outer;
+                        return;
                     }
                     parent_sig.change_block_kind(PageNodeType::TextBlock);
-                    break 'outer;
+                    return;
                 }
             }
         }
@@ -201,7 +201,7 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                 let mut child_sig = start_span_node;
                 loop {
                     let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break }
+                    if !parent_sig.is_first_child(&child_sig) { break } // is not at start of line
                     if !parent_sig.is_block() {
                         child_sig = parent_sig;
                         continue;
@@ -214,7 +214,7 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                     });
                     new_cursor_position(&selection, &start_node, 0);
                     start_node.delete_data(0, 1).unwrap();
-                    break;
+                    return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == "-" {
                 let mut child_sig = start_span_node;
@@ -232,7 +232,7 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                         e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
                     });
                     start_node.delete_data(0, 1).unwrap();
-                    break;
+                    return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == ">" {
                 let mut child_sig = start_span_node;
@@ -250,13 +250,8 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                         e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
                     });
                     start_node.delete_data(0, 1).unwrap();
-                    break;
+                    return;
                 }
-            } else {
-                // TODO: add space to data. (THUS NO NEED TO RETURN EARLY TO SKIP PEVENT DEFAULT. INSTEAD, ONLY USE PREVENTDEFAULT FORARROW KEYS ??)
-
-                // returning so skip prevent default
-                return;
             }
         }
         // if event.get_modifier_state("Shift") {
@@ -268,30 +263,24 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
         else if key_code == Key::Shift.key_code()
         || key_code == Key::Tab.key_code() {
             // do nothing
+            return;
         }
         else if key_code == Key::ArrowUp.key_code() {
             selection.modify("move", "backward", "line").unwrap();
+            return;
         } else if  key_code == Key::ArrowDown.key_code() {
             selection.modify("move", "forward", "line").unwrap();
+            return;
         } else if  key_code == Key::ArrowLeft.key_code() {
             selection.modify("move", "backward", "character").unwrap();
+            return;
         } else if  key_code == Key::ArrowRight.key_code() {
             selection.modify("move", "forward", "character").unwrap();
+            return;
         }
-        else {
-            // insert char
 
-            // there is an indexing mismatch between rust and javascript for 
-            // unicode text, so the easiest way to modify the rust data is to 
-            // simply copy the javascript text
-            start_node.insert_data(start_offset, &key).unwrap();
-            selection.modify("move", "right", "character").unwrap();
-            start_span_node.update_untracked(|n| {
-                let new_txt = start_span_elem.text_content().unwrap();
-                n.content.insert("text".into(), new_txt).unwrap();
-                log!("new \"text\": {}", n.content.get("text").unwrap());
-            });
-        }
+        // insert char
+        start_span_node.insert_char(&key, &start_node, start_offset, &selection);
     }
 
     // let keys = [

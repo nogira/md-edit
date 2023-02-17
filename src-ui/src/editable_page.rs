@@ -388,7 +388,7 @@ fn create_raw_text_elem(node: PageNode) -> Element {
     let elem = document().create_element("span").unwrap();
     elem.set_attribute("type", PageNodeType::RawText.value()).unwrap();
     elem.set_attribute("hash", &node.hash).unwrap();
-    elem.set_inner_html(node.content.get("text").unwrap());
+    elem.set_inner_html(&spaces_to_nbsp(node.content.get("text").unwrap()));
     elem
 }
 
@@ -398,6 +398,20 @@ fn create_unknown_span_elem(node: PageNode) -> Element {
     elem.set_attribute("hash", &node.hash).unwrap();
     elem.set_inner_html("‼️ only raw text allowed");
     elem
+}
+
+pub fn spaces_to_nbsp(text: &str) -> String {
+    let mut content = String::new();
+    for char in text.chars() {
+        if char == ' ' {
+            content.push_str("&nbsp;");
+            // no need to do same for tabs bc 1) doesn't 
+            // seem like you can, and 2) tabs converted to blocks
+        } else {
+            content.push(char);
+        }
+    }
+    content
 }
 
 // fn new_cursor_position() {
@@ -1357,21 +1371,6 @@ fn create_unknown_span_elem(node: PageNode) -> Element {
 //         }
 //     }
 //     elem_spans
-// }
-
-
-// fn spaces_to_nbsp(text: &str) -> String {
-//     let mut content = String::new();
-//     for char in text.chars() {
-//         if char == ' ' {
-//             content.push_str("&nbsp;");
-//             // no need to do same for tabs bc 1) doesn't 
-//             // seem like you can, and 2) tabs converted to blocks
-//         } else {
-//             content.push(char);
-//         }
-//     }
-//     content
 // }
 
 // fn get_hideable_md_type(elem: &Element) -> HideableMDType {
