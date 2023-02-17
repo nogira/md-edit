@@ -447,10 +447,42 @@ impl InsertChar for RwSignal<PageNode> {
         self.update_untracked(|n| {
             let elem = n.elem_ref.clone().unwrap();
             elem.set_inner_html(&spaces_to_nbsp(&new_txt));
+
+            let txt_node: CharacterData = elem.first_child().unwrap().dyn_into().unwrap();
+            new_cursor_position(selection, &txt_node, offset);
+            // the reason i have to do this instead of simply inputting 
+            // `offset + 1` into `new_cursor_position` is bc the offset is not 
+            // the offset of chars, e.g. a single unicode char could be of length 2
+            selection.modify("move", "right", "character").unwrap();
+
+            n.content.insert("text".into(), new_txt).unwrap();
+        });
+    }
+}
+
+pub trait RemoveChar {
+    fn remove_char(&self, text_node: &CharacterData, offset: u32, selection: &Selection);
+}
+impl RemoveChar for RwSignal<PageNode> {
+    fn remove_char(&self, text_node: &CharacterData, offset: u32, selection: &Selection) {
+        // there is an indexing mismatch between rust and javascript for 
+        // unicode text, so the easiest way to modify the rust data is to 
+        // simply copy the javascript text
+        let txt_len = text_node.length();
+        let start_txt = text_node.substring_data(0, offset - 1).unwrap();
+        let end_txt = text_node.substring_data(offset, txt_len - offset).unwrap();
+        let new_txt = format!("{}{}", start_txt, end_txt);
+
+        self.update_untracked(|n| {
+            let elem = n.elem_ref.clone().unwrap();
+            elem.set_inner_html(&spaces_to_nbsp(&new_txt));
             
             let txt_node: CharacterData = elem.first_child().unwrap().dyn_into().unwrap();
             new_cursor_position(selection, &txt_node, offset);
-            selection.modify("move", "right", "character").unwrap();
+            // the reason i have to do this instead of simply inputting 
+            // `offset - 1` into `new_cursor_position` is bc the offset is not 
+            // the offset of chars, e.g. a single unicode char could be of length 2
+            selection.modify("move", "left", "character").unwrap();
 
             n.content.insert("text".into(), new_txt).unwrap();
         });

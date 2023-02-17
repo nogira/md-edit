@@ -1,6 +1,8 @@
 use leptos::{log, RwSignal, document, JsCast, UntrackedGettableSignal, 
     UntrackedSettableSignal};
 use web_sys::{CharacterData, Range, Selection, Node};
+use crate::page_data::RemoveChar;
+
 use super::{Page, PageNodeType, HashToNode, IsFirstChild, IsBlock, PrevChild, 
     ChangeBlockKind, InsertNodes, RemoveChild, RemoveThisBlockShell, InsertChar,
     get_prev_block_node, update_hash_locations};
@@ -193,6 +195,8 @@ pub fn process_keypress(key: String, key_code: u32, page_data: RwSignal<Page>) {
                     return;
                 }
             }
+            start_span_node.remove_char(&start_node, start_offset, &selection);
+            return;
         }
         // SPACE key pressed
         else if key_code == Key::Space.key_code() {
