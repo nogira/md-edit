@@ -436,6 +436,8 @@ impl InsertChar for RwSignal<PageNode> {
         // unicode text, so the easiest way to modify the rust data is to 
         // simply copy the javascript text
 
+        let char_len = char.len();
+
         // originally did `text_node.insert_data(offset, dom_char).unwrap();`, 
         // but can't add 2 spaces in a row, and trying to add `&nbsp;` doesn't 
         // convert it to a space when displayed
@@ -449,11 +451,7 @@ impl InsertChar for RwSignal<PageNode> {
             elem.set_inner_html(&spaces_to_nbsp(&new_txt));
 
             let txt_node: CharacterData = elem.first_child().unwrap().dyn_into().unwrap();
-            new_cursor_position(selection, &txt_node, offset);
-            // the reason i have to do this instead of simply inputting 
-            // `offset + 1` into `new_cursor_position` is bc the offset is not 
-            // the offset of chars, e.g. a single unicode char could be of length 2
-            selection.modify("move", "right", "character").unwrap();
+            new_cursor_position(selection, &txt_node, offset + char_len as u32);
 
             n.content.insert("text".into(), new_txt).unwrap();
         });
@@ -471,18 +469,21 @@ impl RemoveChar for RwSignal<PageNode> {
         let txt_len = text_node.length();
         let start_txt = text_node.substring_data(0, offset - 1).unwrap();
         let end_txt = text_node.substring_data(offset, txt_len - offset).unwrap();
-        let new_txt = format!("{}{}", start_txt, end_txt);
+        let mut new_txt = format!("{}{}", start_txt, end_txt);
+        // if line/span is empty, you can no longer place cursor on than , 
+        // thus, we need to place a zero width invisible char instead, and 
+        // handle delete/select/arrow/add-first-char so it behaves like there 
+        // is no char rather than behave like there is a zero width char
+        if new_txt == "" { new_txt = "&#65279;".to_string() }
+
+        // TODO: need to set span to raw text ndoe type if `new_txt == ""`
 
         self.update_untracked(|n| {
             let elem = n.elem_ref.clone().unwrap();
             elem.set_inner_html(&spaces_to_nbsp(&new_txt));
-            
+
             let txt_node: CharacterData = elem.first_child().unwrap().dyn_into().unwrap();
-            new_cursor_position(selection, &txt_node, offset);
-            // the reason i have to do this instead of simply inputting 
-            // `offset - 1` into `new_cursor_position` is bc the offset is not 
-            // the offset of chars, e.g. a single unicode char could be of length 2
-            selection.modify("move", "left", "character").unwrap();
+            new_cursor_position(selection, &txt_node, offset - 1);
 
             n.content.insert("text".into(), new_txt).unwrap();
         });
@@ -631,7 +632,7 @@ pub fn update_hash_locations_recursive(nodes: &Vec<RwSignal<PageNode>>, location
 }
 
 /// generate a utf-8 hash string of length 3
-fn rand_utf8_hash() -> String {
+pub fn rand_utf8_hash() -> String {
     // chars used: 256 utf-8
     // generated random number: u64 = 2^64 = 18.4 quintillion
     // 256^3 = 16.777 million

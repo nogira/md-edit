@@ -1,3 +1,7 @@
+/* remove blue focus outline from textbox when textbox is selected */
+[type="p"]:focus {
+    outline: none;
+}
 
 [type=q] {
     border-left: 3px solid lightblue;

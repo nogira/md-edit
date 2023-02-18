@@ -86,11 +86,8 @@ pub fn EditablePage(cx: Scope) -> impl IntoView {
 
     let handle_keypress = move |event: web_sys::KeyboardEvent| {
         event.prevent_default();
-        let key = event.key();
-        let key_code = event.key_code();
-        log!("KEY: {:?}", key);
-        log!("KEYCODE: {:?}", key_code);
-        process_keypress(key, key_code, page_data.clone());
+        process_keypress(cx, event, page_data.clone());
+        update_hash_locations(&page_data);
         // refresh view
         if let Some(page_elem) = &page_elem_ref.get() {
             let page_elem = page_elem.unchecked_ref::<web_sys::Element>();
