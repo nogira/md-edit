@@ -1,4 +1,4 @@
-use leptos::{log, Scope, RwSignal, create_rw_signal};
+use leptos::{log, Scope, RwSignal, create_rw_signal, UntrackedGettableSignal, UntrackedSettableSignal};
 use web_sys::Element;
 
 use super::{Page, PageNode, CreateElem, HashToLocation, IsFirstChild, IsLastChild, NextChild};
@@ -228,8 +228,18 @@ fn insert_new_node_before(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
     }
 }
 
+fn remove_all_children_elems(elem: &RwSignal<PageNode>) {
+    let children = elem.get_untracked().children;
+    for child in children {
+        child.update_untracked(|n| n.elem_ref = None);
+        remove_all_children_elems(&child);
+    }
+}
+
 /// returns the total height of the nodes removed
 fn remove_top_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
+    // remove all span elements
+    remove_all_children_elems(&elem);
     // 1. REMOVE ALL ITS PARENTS TOO IF IT'S THE ONLY CHILD CURRENTLY
     // 2. CALCULATE THE HEIGHT ITS USING AND, THEN UPDATE THE PADDING DIV
     // 3. REMOVE DOM_REF FROM THE NODE(S)
@@ -302,6 +312,8 @@ fn insert_new_node_after(cx: Scope, new_node: RwSignal<PageNode>) -> u32 {
 
 /// returns the total height of the nodes removed
 fn remove_bot_elem_from_dom(elem: RwSignal<PageNode>) -> u32 {
+    // remove all span elements
+    remove_all_children_elems(&elem);
     // 1. REMOVE ALL ITS PARENTS TOO IF IT'S THE ONLY CHILD CURRENTLY
     // 2. CALCULATE THE HEIGHT ITS USING AND, THEN UPDATE THE PADDING DIV
     // 3. REMOVE DOM_REF FROM THE NODE(S)

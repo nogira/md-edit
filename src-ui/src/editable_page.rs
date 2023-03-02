@@ -401,7 +401,7 @@ pub fn spaces_to_nbsp(text: &str) -> String {
     let mut content = String::new();
     for char in text.chars() {
         if char == ' ' {
-            content.push_str("&nbsp;");
+            content.push_str("\u{a0}"); // this is the ascii representation of `&nbsp;`
             // no need to do same for tabs bc 1) doesn't 
             // seem like you can, and 2) tabs converted to blocks
         } else {

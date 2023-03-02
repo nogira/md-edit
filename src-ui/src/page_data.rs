@@ -115,15 +115,21 @@ impl Page {
         for node in nodes {
             let node = node.get();
 
-            lines.push("Node<".into());
-            lines.push(format!("    hash: {},", node.hash));
-            lines.push(format!("    kind: {},", node.kind.value()));
-            lines.push(format!("    content: {:?},", node.content.get("text")));
+            let mut first_line = String::new();
+            first_line.push_str("Node<");
+            first_line.push_str(&format!(" hash: {},", node.hash));
+            first_line.push_str(&format!(" kind: {},", node.kind.value()));
             let has_elem_ref = match node.elem_ref {
                 Some(_) => true,
                 None => false,
             };
-            lines.push(format!("    has_elem_ref: {:?},", has_elem_ref));
+            first_line.push_str(&format!(" has_elem_ref: {:?},", has_elem_ref));
+            lines.push(first_line);
+
+            lines.push(format!("    parent_hash: {:?},", node.parent.unwrap().get_untracked().hash));
+
+            lines.push(format!("    content: {:?},", node.content.get("text")));
+
             let children = Self::debug_nodes_recursive(&node.children);
             lines.push(format!("    children: ["));
             for child in children {
@@ -277,6 +283,17 @@ impl NextChild<RwSignal<PageNode>> for RwSignal<PageNode> {
         }).unwrap()
     }
 }
+pub trait NextSibling<T> {
+    fn next_sibling(&self) -> Option<RwSignal<PageNode>>;
+}
+impl NextSibling<RwSignal<PageNode>> for RwSignal<PageNode> {
+    fn next_sibling(&self) -> Option<RwSignal<PageNode>> {
+        let parent = self.update_returning_untracked(|p| {
+            p.parent.clone().unwrap()
+        }).unwrap();
+        parent.next_child(self)
+    }
+}
 pub trait RemoveChild<T> {
     fn remove_child(&self, child: &T);
 }
@@ -310,17 +327,60 @@ impl ChangeBlockKind for RwSignal<PageNode> {
     }
 }
 
-pub trait InsertText {
-    fn insert_text(&self, from: RwSignal<PageNode>);
+pub trait IndexOf<T> {
+    fn index_of(&self, from: T) -> Option<usize>;
 }
-impl InsertText for RwSignal<PageNode> {
-    fn insert_text(&self, from: RwSignal<PageNode>) {
-        // self.update_untracked(|p| {
-        //     p.kind = new_kind.clone();
-        //     if let Some(elem_ref) =  p.elem_ref.clone() {
-        //         elem_ref.set_attribute("type", new_kind.value()).unwrap();
-        //     }
-        // });
+impl IndexOf<&RwSignal<PageNode>> for Vec<RwSignal<PageNode>> {
+    /// find idx of an elem in Vec
+    fn index_of(&self, elem: &RwSignal<PageNode>) -> Option<usize> {
+        for (i, node_sig) in self.iter().enumerate() {
+            if node_sig == elem {
+                return Some(i);
+            }
+        }
+        return None
+    }
+}
+
+// pub trait InsertText {
+//     fn insert_text(&self, from: RwSignal<PageNode>);
+// }
+// impl InsertText for RwSignal<PageNode> {
+//     fn insert_text(&self, from: RwSignal<PageNode>) {
+//         // self.update_untracked(|p| {
+//         //     p.kind = new_kind.clone();
+//         //     if let Some(elem_ref) =  p.elem_ref.clone() {
+//         //         elem_ref.set_attribute("type", new_kind.value()).unwrap();
+//         //     }
+//         // });
+//     }
+// }
+pub trait AppendNode {
+    fn append_node(&self, node: RwSignal<PageNode>);
+}
+impl AppendNode for RwSignal<PageNode> {
+    fn append_node(&self, node_sig: RwSignal<PageNode>) {
+        self.update_untracked(|parent| {
+            let parent_elem = parent.elem_ref.clone().unwrap();
+            // if the node we're moving is already rendered, use it
+            let node_elem = match node_sig.get().elem_ref {
+                Some(v) => v,
+                // must create a new node to insert if it's not already present
+                None => node_sig.create_elem(),
+            };
+            parent_elem.append_child(&node_elem).unwrap();
+            node_sig.update_untracked(|n| {
+                // remove if not in view
+                if !node_elem.elem_is_in_view() {
+                    node_elem.remove();
+                    n.elem_ref = None;
+                } else {
+                    n.elem_ref = Some(node_elem);
+                }
+                n.parent = Some(self.clone())
+            });
+            parent.children.push(node_sig);
+        });
     }
 }
 pub trait InsertNodes {
@@ -328,23 +388,15 @@ pub trait InsertNodes {
 }
 impl InsertNodes for RwSignal<PageNode> {
     /// `before` is the node to insert before
-    fn insert_nodes(&self, nodes: &Vec<RwSignal<PageNode>>, before: Option<&RwSignal<PageNode>>) {
-        self.update_untracked(|parent| {
-            let parent_elem = parent.elem_ref.clone().unwrap();
-            let children = parent.children.clone();
-            // if there is a before node, insert before, else insert as last child
-            if let Some(before_sig) = before {
-                // find idx of elem
-                let mut idx = None;
-                // children.ind
-                for (i, node_sig) in children.iter().enumerate() {
-                    if node_sig == before_sig {
-                        idx = Some(i);
-                        break;
-                    }
-                }
-                if idx.is_none() { panic!("failed to insert nodes bc the node to insert before is not present in the parent block") }
-                let idx = idx.unwrap();
+    fn insert_nodes(&self, nodes_to_insert: &Vec<RwSignal<PageNode>>, before: Option<&RwSignal<PageNode>>) {
+        if let Some(before_sig) = before {
+            self.update_untracked(|parent| {
+                // if there is a before node, insert before, else insert as last child
+                
+                let idx = match parent.children.clone().index_of(before_sig) {
+                    Some(idx) => idx,
+                    None => panic!("failed to insert nodes bc the node to insert before is not present in the parent block"),
+                };
 
                 // BEFORE ELEM MIGHT NOT BE PRESENT ON THE SCREEN, BUT SOME OF 
                 // THE ELEMENTS ON THE SCREEN MIGHT BE
@@ -356,56 +408,45 @@ impl InsertNodes for RwSignal<PageNode> {
                     None => None,
                 };
 
+                let parent_elem = parent.elem_ref.clone().unwrap();
                 // must check EACH elem is in view to then remove if not bc 
                 // even if you track the first elem that is not in view, the 
                 // first elems might not be in view, but the later ones might be
-                for (i, node_sig) in nodes.iter().enumerate() {
+                for (i, node_sig) in nodes_to_insert.iter().enumerate() {
+                    let node_elem_maybe = node_sig.get_untracked().elem_ref;
                     // if the node we're moving is already rendered, use it
-                    let node_elem = node_sig.get().elem_ref
+                    let node_elem: Element = match node_elem_maybe {
+                        Some(v) => v,
                         // must create a new node to insert if it's not already present
-                        .unwrap_or(node_sig.create_elem());
+                        None => node_sig.create_elem(),
+                    };
                     // this defaults to `.add_child()` if `optional_before_elem` is `None`
                     parent_elem.insert_before(&node_elem, 
                         optional_before_elem.as_ref()).unwrap();
                     node_sig.update_untracked(|n| {
                         // remove if not in view
                         if !node_elem.elem_is_in_view() {
-                            log!("NOT IN VIEW");
+                            // log!("NOT IN VIEW");
                             node_elem.remove();
                             n.elem_ref = None;
                         } else {
-                            log!("IN VIEW");
+                            // log!("IN VIEW");
                             n.elem_ref = Some(node_elem);
                         }
                         n.parent = Some(self.clone());
-                        log!("NO CHILDREN? hash: {:?}", n.children[0].get_untracked().hash);
+                        // log!("NO CHILDREN? hash: {:?}", n.children[0].get_untracked().hash);
                     });
                     // log!("pre-len: {:?}", parent.children.len());
                     parent.children.insert(idx+i, node_sig.to_owned());
                     // log!("post-len: {:?}", parent.children.len());
                 }
-            // insert as last children
-            } else {
-                for node_sig in nodes {
-                    // if the node we're moving is already rendered, use it
-                    let node_elem = node_sig.get().elem_ref
-                        // must create a new node to insert if it's not already present
-                        .unwrap_or(node_sig.create_elem());
-                    parent_elem.append_child(&node_elem).unwrap();
-                    node_sig.update_untracked(|n| {
-                        // remove if not in view
-                        if !node_elem.elem_is_in_view() {
-                            node_elem.remove();
-                            n.elem_ref = None;
-                        } else {
-                            n.elem_ref = Some(node_elem);
-                        }
-                        n.parent = Some(self.clone())
-                    });
-                    parent.children.push(node_sig.to_owned());
-                }
+            });
+        // insert as last children
+        } else {
+            for node_sig in nodes_to_insert {
+                self.append_node(node_sig.to_owned())
             }
-        });
+        }
     }
 }
 
@@ -419,9 +460,9 @@ impl RemoveThisBlockShell for RwSignal<PageNode> {
         let curr_block = self.get_untracked();
         // remove each child, using this block as the node to insert before
         let parent_sig = curr_block.parent.unwrap();
-        log!("pre-len: {:?}", parent_sig.get().children.len());
+        // log!("pre-len: {:?}", parent_sig.get().children.len());
         parent_sig.insert_nodes(&curr_block.children, Some(self));
-        log!("post-len: {:?}", parent_sig.get().children.len());
+        // log!("post-len: {:?}", parent_sig.get().children.len());
         // remove this block
         parent_sig.remove_child(self);
     }
