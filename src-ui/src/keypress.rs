@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem};
 use leptos::{log, Scope, RwSignal, document, JsCast, UntrackedGettableSignal, 
     UntrackedSettableSignal};
 use web_sys::{CharacterData, Range, Selection, Node};
 
 use super::{Page, PageNode, PageNodeType, HashToNode, IsFirstChild, IsLastChild, 
     IsBlock, PrevChild, ChangeBlockKind, InsertNodes, RemoveChild, NextChild,
-    RemoveThisBlockShell, InsertChar,RemoveChar, rand_utf8_hash, 
+    RemoveThisBlockShell, InsertChar,RemoveChar, NextSibling, rand_utf8_hash, 
     get_prev_block_node, update_hash_locations};
 
 pub enum Key {
@@ -59,11 +59,23 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
 
     // SELECTION NODES ARE TEXT NODES
     let start_node: CharacterData = selection.anchor_node().unwrap().dyn_into().unwrap();
+    log!("START NODE TEXT: {}", start_node.data());
     let start_offset = selection.anchor_offset();
     // parent span
     let start_span_elem = start_node.parent_element().unwrap();
     let hash = start_span_elem.get_attribute("hash").unwrap();
+    log!("START NODE SPAN HASH: {}", hash);
     let start_span_node = page_data.hash_to_node(&hash).unwrap();
+
+    // // DEBUG: is this element the same as the one stored?
+    // let __span_node_elem = page_data.hash_to_node(&hash).unwrap().get_untracked().elem_ref.unwrap();
+    // let __span_is_same = &start_span_elem == &__span_node_elem;
+    // log!("SPAN ELEM IS SAME AS IN PAGE_DATA? {}", __span_is_same);
+    // let __tb_elem = start_span_elem.parent_element().unwrap();
+    // let __tb_hash = __tb_elem.get_attribute("hash").unwrap();
+    // let __tb_node_elem = page_data.hash_to_node(&__tb_hash).unwrap().get_untracked().elem_ref.unwrap();
+    // let __tb_is_same = &__tb_elem == &__tb_node_elem;
+    // log!(" TEXT BLOCK ELEM IS SAME AS IN PAGE_DATA? {}", __tb_is_same);
 
     // FIXME: only need to prevent default if the delete if the first 
     // char in a block
@@ -86,37 +98,100 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
         // DELETE key pressed
         if key_code == Key::Delete.key_code() {
             if start_offset == 0 {
-                let mut child_sig = start_span_node;
+                let mut child_span_sig = start_span_node;
                 loop {
-                    let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break } // not start of line
+                    let parent_sig = child_span_sig.get().parent.unwrap();
+                    if !parent_sig.is_first_child(&child_span_sig) { break } // not start of line
                     if !parent_sig.is_block() {
-                        child_sig = parent_sig;
+                        child_span_sig = parent_sig;
                         continue;
                     }
+                    // 1) get the first parent block
                     let parent = parent_sig.get();
-                    // IF THE FIRST PARENT BLOCK IS A TextBlock, THERE IS 
-                    // NOT NECESSARILY A SPECIALIZED BLOCK TO CONVERT TO A 
-                    // TextBlock. WE NEED TO CHECK IF THE PARENT BLOCK'S 
-                    // PARENT BLOCK IS A BRANCH BLOCK THAT IS NOT THE ROOT 
-                    // PAGE BLOCK (as of now, Indent, or Quote)
-                    // if the parent block is `Page`, we need to check if 
-                    // there is a block above the current parent (that 
-                    // isn't a table), and if so, append the text in the 
-                    // `TextBlock` to the block above. if the parent block instead is a 
-                    if parent.kind == PageNodeType::TextBlock { 
-                        // // TODO: JOIN TO BLOCK ABOVE IF PRESENT AND NO BLOCK CONTAINING THE TEXT BLOCK
+                    // 2) to remove the current inner-most block type we 
+                    // either a) if not a TextBlock convert it to a TextBlock, 
+                    // as these blocks should always be leaf blocks so don't 
+                    // need to worry about affecting any sibling blocks by 
+                    // converting the parent block, or b) if a TextBlock, 
+                    // remove the parent block from this block (just from this 
+                    // block, not from any siblings if any), however if the 
+                    // parent block is the Page block, we obviously don't want 
+                    // to remove that, instead we check if there is a block 
+                    // above to see if we need to append all the spans from 
+                    // the current TextBlock to the block above
+                    if parent.kind == PageNodeType::TextBlock {
+                        let textblock_sig = parent_sig.clone();
+                        let block_around_textblock_sig = parent.parent.unwrap();
 
-                        // // PARENT = TEXT BLOCK
+                        if block_around_textblock_sig.is_first_child(&textblock_sig) {
+                            // if is the first block child and parent block is 
+                            // not a Page, remove the parent block and return
+                            if block_around_textblock_sig.get().kind != PageNodeType::Page {
+                                // log!("IS INDENT OR QUOTE");
+                                block_around_textblock_sig.remove_this_block_shell();
+                                update_hash_locations(&page_data);
+                                new_cursor_position(&selection, &start_node, 0);
+                            }
+                            // if parent block is Page and there is no previous 
+                            // block, return with no changes
+                            return;
+                        }
 
-                        // // FIXME: WAIT I DONT THINK IT MATTERS IF PAGE OR INDENT OR QUOTE
-                        let parent_parent_sig = parent.parent.unwrap();
-                        if let Some(_) = parent_parent_sig.prev_child(&parent_sig) {
+                        let block_around_textblock = block_around_textblock_sig.get_untracked();
+                        if block_around_textblock.kind != PageNodeType::Page {
+                            // remove the text block, and any blocks after 
+                            // it, from this outer block, encasing the 
+                            // blocks after it in a new block of the same type
+                            let insertion_parent_sig = block_around_textblock.parent.unwrap();
+                            let insertion_sig = block_around_textblock_sig.next_sibling();
+                            // FIXME: SPAN ELEMENT IS BEING CHANGED CAUSING A BUG
+                            block_around_textblock_sig.update_untracked(|block_around_textblock| {
+                                let after_block_sig = PageNode::signal_from(
+                                    // FIXME: THIS HASH MIGHT NOT BE UNIQUE
+                                    cx, rand_utf8_hash(), block_around_textblock.kind.clone(), 
+                                    HashMap::new(), vec![], None, 0);
+                                let mut after = false;
+                                let mut first_after = false;
+                                let children = mem::take(
+                                    &mut block_around_textblock.children);
+                                for child in children {
+                                    if child == textblock_sig {
+                                        insertion_parent_sig.insert_nodes(&vec![child], (&insertion_sig).as_ref());
+                                        after = true;
+                                        first_after = true;
+                                        continue
+                                    }
+                                    if after == true {
+                                        // must insert the `after_block_sig` node pre-moving the child nodes so the child nodes are carried across
+                                        if first_after == true {
+                                            insertion_parent_sig.insert_nodes(
+                                                &vec![after_block_sig], 
+                                                (&insertion_sig).as_ref());
+                                            first_after = false;
+                                        }
+                                        after_block_sig.insert_nodes(&vec![child], None);
+                                        continue
+                                    }
+                                    // keep child in the block_around_textblock
+                                    block_around_textblock.children.push(child);
+                                    
+                                }
+                            });
+                            // block_around_textblock_sig.insert()
+                            update_hash_locations(&page_data);
+
+                            // log!("{}", page_data.get_untracked().debug_nodes());
+
+                            // new_cursor_position(&selection, &start_node, 0);
+                            return
+
+                        // parent around TextBlock is `Page` block, so we join to 
+                        } else {
                             // get deepest branch block
                             // if last child is NOT a text leaf (e.g. table), 
                             // merge text into leaf block, else do nothing
                             let prev_block_sig = get_prev_block_node( // this is a leaf block
-                                &parent_sig.get().hash,
+                                &textblock_sig.get().hash,
                                 page_data
                             ).unwrap();
                             if prev_block_sig.get().kind == PageNodeType::Table {
@@ -135,7 +210,7 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                             false, append all elems
                             */
                             let mut node_1_sig = prev_block_sig; // prev block
-                            let mut node_2_sig = parent_sig; // current text block
+                            let mut node_2_sig = textblock_sig; // current text block
                             'inner: loop {
                                 let node_1 = node_1_sig.get_untracked();
                                 let mut node_2 = node_2_sig.get_untracked();
@@ -187,24 +262,14 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                                 }
                             }
                             // FIXME: this remove might create an error if the first last child is different to the first first child ?? but
-                            parent_parent_sig.remove_child(&parent_sig);
+                            block_around_textblock_sig.remove_child(&textblock_sig);
                             // update hashes
                             update_hash_locations(&page_data);
-
-                        // IF NO PREV CHILD AND KIND != PAGE, REMOVE THE 
-                        // PARENT_PARENT BLOCK
-                        // (IF PAGE, NOTHING TO DO)
-                        } else {
-                            if parent_parent_sig.get().kind != PageNodeType::Page {
-                                log!("IS INDENT OR QUOTE");
-                                parent_parent_sig.remove_this_block_shell();
-                                update_hash_locations(&page_data);
-
-                                new_cursor_position(&selection, &start_node, 0);
-                            }
                         }
                         return;
                     }
+                    // if first parent block is not a TextBlock (e.g. H1),
+                    // change to textblock to act as a delete
                     parent_sig.change_block_kind(PageNodeType::TextBlock);
                     return;
                 }
@@ -342,8 +407,11 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                     let parent = parent_sig.get();
                     if parent.kind != PageNodeType::TextBlock { break }
                     parent_sig.change_block_kind(PageNodeType::Quote);
+                    
                     start_span_node.update_untracked(|e| {
-                        e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                        let new_text = (&txt_node_str[1..]).clone();
+                        log!("new_text: {}", new_text);
+                        e.content.insert("txt".into(), new_text.into());
                     });
                     start_node.delete_data(0, 1).unwrap();
                     return;
