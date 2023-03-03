@@ -345,6 +345,20 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                 if parent_node.is_block() {
                     let parent_parent_sig = parent_sig.get_untracked().parent.unwrap();
                     let parent_next_child = parent_parent_sig.next_child(&parent_sig);
+
+                    // if the new line is blank (`""`), replace with invisible no-width char
+                    new_node_sig.update_untracked(|b| {
+                        b.children[0].update_untracked(|n| {
+                            let txt = n.content.get("text".into());
+                            if let Some(txt) = txt {
+                                // log!("RIGHT TXT: {:?}", txt);
+                                if txt == &"".to_string() {
+                                    n.content.insert("text".into(), "\u{a0}".into());
+                                }
+                            }
+                        });
+                    });
+
                     parent_parent_sig.insert_nodes(&vec![new_node_sig], 
                         (&parent_next_child).as_ref());
                     new_cursor_position(&selection, 
@@ -366,8 +380,8 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                     start_span_node.update_untracked(|e| {
                         e.content.insert("text".into(), (&txt_node_str[1..]).clone().into());
                     });
-                    new_cursor_position(&selection, &start_node, 0);
                     start_node.delete_data(0, 1).unwrap();
+                    new_cursor_position(&selection, &start_node, 0);
                     return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == "-" {
@@ -380,6 +394,7 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                         e.content.insert("text".into(), (&txt_node_str[1..]).clone().into());
                     });
                     start_node.delete_data(0, 1).unwrap();
+                    new_cursor_position(&selection, &start_node, 0);
                     return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == ">" {
@@ -389,11 +404,10 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                 && block_sig.get_untracked().kind == PageNodeType::TextBlock {
                     block_sig.change_block_kind(PageNodeType::Quote);
                     start_span_node.update_untracked(|e| {
-                        let new_text = (&txt_node_str[1..]).clone();
-                        log!("new_text: {}", new_text);
-                        e.content.insert("text".into(), new_text.into());
+                        e.content.insert("text".into(), (&txt_node_str[1..]).clone().into());
                     });
                     start_node.delete_data(0, 1).unwrap();
+                    new_cursor_position(&selection, &start_node, 0);
                     return;
                 }
             }
