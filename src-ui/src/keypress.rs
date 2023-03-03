@@ -77,6 +77,8 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
     // let __tb_is_same = &__tb_elem == &__tb_node_elem;
     // log!(" TEXT BLOCK ELEM IS SAME AS IN PAGE_DATA? {}", __tb_is_same);
 
+    // log!("BEFORE: {}", page_data.get_untracked().debug_nodes());
+
     // FIXME: only need to prevent default if the delete if the first 
     // char in a block
 
@@ -179,9 +181,6 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                             });
                             // block_around_textblock_sig.insert()
                             update_hash_locations(&page_data);
-
-                            // log!("{}", page_data.get_untracked().debug_nodes());
-
                             // new_cursor_position(&selection, &start_node, 0);
                             return
 
@@ -359,59 +358,40 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
         else if key_code == Key::Space.key_code() {
             let txt_node_str = start_node.text_content().unwrap();
             if start_offset == 1 && &txt_node_str[0..1] == "#" {
-                let mut child_sig = start_span_node;
-                loop {
-                    let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break } // is not at start of line
-                    if !parent_sig.is_block() {
-                        child_sig = parent_sig;
-                        continue;
-                    }
-                    let parent = parent_sig.get();
-                    if parent.kind != PageNodeType::TextBlock { break }
-                    parent_sig.change_block_kind(PageNodeType::H1);
+                let span_sig = start_span_node;
+                let block_sig = span_sig.get_untracked().parent.unwrap();
+                if block_sig.is_first_child(&span_sig)
+                && block_sig.get_untracked().kind == PageNodeType::TextBlock {
+                    block_sig.change_block_kind(PageNodeType::H1);
                     start_span_node.update_untracked(|e| {
-                        e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                        e.content.insert("text".into(), (&txt_node_str[1..]).clone().into());
                     });
                     new_cursor_position(&selection, &start_node, 0);
                     start_node.delete_data(0, 1).unwrap();
                     return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == "-" {
-                let mut child_sig = start_span_node;
-                loop {
-                    let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break }
-                    if !parent_sig.is_block() {
-                        child_sig = parent_sig;
-                        continue;
-                    }
-                    let parent = parent_sig.get();
-                    if parent.kind != PageNodeType::TextBlock { break }
-                    parent_sig.change_block_kind(PageNodeType::Dot);
+                let span_sig = start_span_node;
+                let block_sig = span_sig.get_untracked().parent.unwrap();
+                if block_sig.is_first_child(&span_sig)
+                && block_sig.get_untracked().kind == PageNodeType::TextBlock {
+                    block_sig.change_block_kind(PageNodeType::Dot);
                     start_span_node.update_untracked(|e| {
-                        e.content.insert("txt".into(), (&txt_node_str[1..]).clone().into());
+                        e.content.insert("text".into(), (&txt_node_str[1..]).clone().into());
                     });
                     start_node.delete_data(0, 1).unwrap();
                     return;
                 }
             } else if start_offset == 1 && &txt_node_str[0..1] == ">" {
-                let mut child_sig = start_span_node;
-                loop {
-                    let parent_sig = child_sig.get().parent.unwrap();
-                    if !parent_sig.is_first_child(&child_sig) { break }
-                    if !parent_sig.is_block() {
-                        child_sig = parent_sig;
-                        continue;
-                    }
-                    let parent = parent_sig.get();
-                    if parent.kind != PageNodeType::TextBlock { break }
-                    parent_sig.change_block_kind(PageNodeType::Quote);
-                    
+                let span_sig = start_span_node;
+                let block_sig = span_sig.get_untracked().parent.unwrap();
+                if block_sig.is_first_child(&span_sig)
+                && block_sig.get_untracked().kind == PageNodeType::TextBlock {
+                    block_sig.change_block_kind(PageNodeType::Quote);
                     start_span_node.update_untracked(|e| {
                         let new_text = (&txt_node_str[1..]).clone();
                         log!("new_text: {}", new_text);
-                        e.content.insert("txt".into(), new_text.into());
+                        e.content.insert("text".into(), new_text.into());
                     });
                     start_node.delete_data(0, 1).unwrap();
                     return;

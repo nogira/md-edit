@@ -102,7 +102,7 @@ impl Page {
 impl Page {
     pub fn debug_nodes(&self) -> String {
         let nodes = &self.nodes.get();
-        let slice = Vec::from([nodes.children[2], nodes.children[3]]);
+        let slice = Vec::from([nodes.children[2]/* , nodes.children[3] */]);
         let lines = Self::debug_nodes_recursive(&slice);
         let mut string = String::new();
         for line in lines {
