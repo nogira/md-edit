@@ -515,7 +515,7 @@ impl RemoveChar for RwSignal<PageNode> {
         // thus, we need to place a zero width invisible char instead, and 
         // handle delete/select/arrow/add-first-char so it behaves like there 
         // is no char rather than behave like there is a zero width char
-        if new_txt == "" { new_txt = "&#65279;".to_string() }
+        if new_txt == "" { new_txt = "\u{a0}".to_string() } // FIXME: convert from space to INVIS_CHAR
 
         // TODO: need to set span to raw text ndoe type if `new_txt == ""`
 

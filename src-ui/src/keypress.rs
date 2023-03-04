@@ -8,6 +8,9 @@ use super::{Page, PageNode, PageNodeType, HashToNode, IsFirstChild, IsLastChild,
     RemoveThisBlockShell, InsertChar,RemoveChar, NextSibling, rand_utf8_hash, 
     get_prev_block_node, update_hash_locations};
 
+const INVIS_CHAR: &str = "\u{a0}"; // currently space char so don't have to deal with cleanup
+// const INVIS_: &str = "\u{feff}"; //  "&#65279;"
+
 pub enum Key {
     Shift, Tab, ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
     Return, Delete, Space, // ForwardSlash, Three,
@@ -59,12 +62,12 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
 
     // SELECTION NODES ARE TEXT NODES
     let start_node: CharacterData = selection.anchor_node().unwrap().dyn_into().unwrap();
-    log!("START NODE TEXT: {}", start_node.data());
+    log!("START NODE TEXT: {:?}", start_node.data());
     let start_offset = selection.anchor_offset();
     // parent span
     let start_span_elem = start_node.parent_element().unwrap();
     let hash = start_span_elem.get_attribute("hash").unwrap();
-    log!("START NODE SPAN HASH: {}", hash);
+    log!("START NODE SPAN HASH: {:?}", hash);
     let start_span_node = page_data.hash_to_node(&hash).unwrap();
 
     // // DEBUG: is this element the same as the one stored?
@@ -176,12 +179,12 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                                     }
                                     // keep child in the block_around_textblock
                                     block_around_textblock.children.push(child);
-                                    
                                 }
                             });
                             // block_around_textblock_sig.insert()
                             update_hash_locations(&page_data);
-                            // new_cursor_position(&selection, &start_node, 0);
+                            log!("now");
+                            new_cursor_position(&selection, &start_node, 0);
                             return
 
                         // parent around TextBlock is `Page` block, so we join to 
@@ -278,12 +281,19 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
         }
         // RETURN key pressed
         else if key_code == Key::Return.key_code() {
+
+            if start_node.data() == INVIS_CHAR.to_string() {
+                // TODO: need to put the cursor on the right side, then let 
+                // the code below run
+                
+            }
+
             // split the spans of the block in two, add a new block below. 
             // transfer the right spans to the new block
 
             let txt_len = start_node.length();
             let left_txt = start_node.substring_data(0, start_offset).unwrap();
-            log!("LEFT TXT: {:?}", left_txt);
+            // log!("LEFT TXT: {:?}", left_txt);
             let right_txt = start_node.substring_data(start_offset, txt_len).unwrap();
             start_span_node.update_untracked(|n| {
                 n.elem_ref.clone().unwrap().set_text_content(Some(&left_txt));
@@ -353,7 +363,7 @@ pub fn process_keypress(cx: Scope, event: web_sys::KeyboardEvent, page_data: RwS
                             if let Some(txt) = txt {
                                 // log!("RIGHT TXT: {:?}", txt);
                                 if txt == &"".to_string() {
-                                    n.content.insert("text".into(), "\u{a0}".into());
+                                    n.content.insert("text".into(), INVIS_CHAR.into());
                                 }
                             }
                         });
